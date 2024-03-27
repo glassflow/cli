@@ -31,7 +31,7 @@ This installs the GlassFlow command globally so you can run `glassflow`commands 
 For Linux-based systems, we support installation by downloading the release version via GitHub:
 
 ```bash
-$ /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/glassflow/install/HEAD/install.sh)" 
+$ /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/glassflow/install/HEAD/install.sh)"
 ```
 
 ## Sign Up
@@ -55,37 +55,37 @@ glassflow --helpglassflow command [subcommand] [options]
 ```
 
 ```bash
-$glassflow --help
+$ glassflow --help
+
+Usage: glassflow [OPTIONS] COMMAND [arg...]
 
 GlassFlow - Python-based data streaming pipelines within minutes.
 
 Options:
-      --version          Show the version and exit
-  -d, --debug            Debug output
-  -v, --verbose          Verbose output
-  -t, --client-timeout   HTTP client timeout in seconds (default 30)
-  -r, --remote           Remote address of GlassFlow API server
+      --version   Show the version and exit
+  -v, --verbose   Verbose output
 
 Commands:
-  signup                 Create new account
-  login                  Log in to GlassFlow
-  profile                Get profile data
-  logout                 Log out from GlassFlow
-  organization           Manage organizations
-  space                  Manage spaces
-  pipeline               Manage pipelines
-  version                Show the version
+  signup          Create new account
+  login           Log in to GlassFlow
+  profile         Get profile data
+  logout          Log out from GlassFlow
+  organization    Manage organizations
+  space           Manage spaces
+  pipeline        Manage pipelines
+  version         Show the version
 ```
 
 You can also see available subcommands for a given command by running `glassflow command --help`. For example:
 
 ```bash
+$ glassflow pipeline --help
+
 Usage: glassflow pipeline [OPTIONS] COMMAND [arg...]
 
 Manage pipelines
 
 Options:
-  -o, --org         Organization ID (default 00000000-0000-0000-0000-000000000000)
 
 Commands:
   list              Get pipelines
@@ -106,4 +106,4 @@ Visit the [GlassFlow examples](https://github.com/glassflow/glassflow-examples) 
 
 ## User Guides
 
-For more detailed information on how to use the GlassFlow CLI, please refer to the [GlassFlow Documentation](https://learn.glassflow.dev/). The documentation provides comprehensive guides, tutorials, and examples to help you get started with GlassFlow CLI. 
+For more detailed information on how to use the GlassFlow CLI, please refer to the [GlassFlow Documentation](https://learn.glassflow.dev/). The documentation provides comprehensive guides, tutorials, and examples to help you get started with GlassFlow CLI.
