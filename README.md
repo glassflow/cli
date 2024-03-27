@@ -11,9 +11,8 @@ The GlassFlow CLI simplifies the process of creating, managing, and monitoring y
 
 ## Installation
 
-The CLI is available for **macOS, and Linux**, and can be installed using standard package managers like [Homebrew](https://brew.sh/).
+The CLI is available for **macOS, Linux, and Windows** OS, and can be installed using standard package managers like [Homebrew](https://brew.sh/).
 
-> If you are a Windows user, we highly recommend leveraging [Windows Subsystem for Linux (WSL)](https://learn.microsoft.com/en-us/windows/wsl/install)
 
 ### Install using Homebrew
 
@@ -26,13 +25,15 @@ brew install glassflow
 
 This installs the GlassFlow command globally so you can run `glassflow`commands from any directory.
 
-### Install from source
+### Install from the release package
 
-For Linux-based systems, we support installation by downloading the release version via GitHub:
+For **Linux** based systems, we support installation by downloading the release version via GitHub:
 
 ```bash
-$ /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/glassflow/install/HEAD/install.sh)"
+$ /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/glassflow/cli/master/install.sh)" "
 ```
+
+To install the CLI on **Windows** OS, follow the [guide in the documentation](https://learn.glassflow.dev/docs/get-started/glassflow-cli#install-on-windows-powershell).
 
 ## Sign Up
 
