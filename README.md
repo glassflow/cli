@@ -1,10 +1,10 @@
 # GlassFlow CLI
 
-The GlassFlow CLI simplifies the process of creating, managing, and monitoring your data pipelines on the GlassFlow platform. It's built for developers, data engineers, and IT professionals who prefer working within a command-line environment to automate tasks and streamline their workflow. The CLI directly interacts with the [GlassFlow API](https://api.glassflow.xyz/v1/docs) for pipeline management.
+The GlassFlow Command Line Interface (CLI) simplifies the process of creating, managing, and monitoring your data pipelines on the GlassFlow platform. It's built for developers, data engineers, and IT professionals who prefer working within a command-line environment to automate tasks and streamline their workflow. The CLI directly interacts with the [GlassFlow API](https://api.glassflow.xyz/v1/docs) for pipeline management.
 
 ## Features
 
-- **Pipeline Management**: Create, update, delete, and list organizations, spaces and data pipelines.
+- **Pipeline Management**: Create, update, delete, and list organizations, spaces, and data pipelines.
 - **Real-Time Data Processing**: Send data to and consume data from your pipelines.
 - **Monitoring and Logs**: Access real-time logs and monitor the performance of your pipelines.
 - **Secure Authentication**: Manage your GlassFlow credentials securely.
