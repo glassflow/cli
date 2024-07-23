@@ -41,7 +41,7 @@ For **Linux** based systems, we support installation by downloading the release 
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/glassflow/cli/master/install.sh)"
 ```
 
-To install the CLI on **Windows** OS, follow the [guide in the documentation](https://learn.glassflow.dev/docs/get-started/glassflow-cli#install-on-windows-powershell).
+To install the CLI on **Windows** OS, follow the [guide in the documentation](https://docs.glassflow.dev/get-started/glassflow-cli#for-windows).
 
 ## Sign Up
 
