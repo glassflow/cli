@@ -38,7 +38,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 	fmt.Println("🛑 Stopping GlassFlow local development environment...")
 
 	// Load configuration
-	cfg, err := config.Load("")
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
