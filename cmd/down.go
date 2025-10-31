@@ -12,8 +12,7 @@ import (
 )
 
 type DownOptions struct {
-	Namespace string
-	Force     bool
+	Force bool
 }
 
 var downOptions = &DownOptions{}
