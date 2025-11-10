@@ -10,6 +10,7 @@ import (
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/kube"
+	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/repo"
 	"k8s.io/client-go/kubernetes"
 )
@@ -105,17 +106,13 @@ func (h *Manager) InstallChart(ctx context.Context, opts *InstallOptions) (*Rele
 		kubeClient.Namespace = opts.Namespace
 	}
 
+	// Check if release already exists
+	getClient := action.NewGet(actionConfig)
+	_, err := getClient.Run(opts.ReleaseName)
+	releaseExists := err == nil
+
+	// Locate chart (needed for both install and upgrade)
 	installAction := action.NewInstall(actionConfig)
-	installAction.ReleaseName = opts.ReleaseName
-	installAction.Namespace = opts.Namespace
-	installAction.CreateNamespace = opts.CreateNamespace
-	installAction.Wait = opts.Wait
-	installAction.Timeout = time.Duration(opts.Timeout) * time.Second
-
-	// Print the Helm command being executed
-	fmt.Printf("🔧 Running: helm install %s %s --namespace %s --create-namespace --wait --timeout %ds\n",
-		opts.ReleaseName, opts.Chart, opts.Namespace, opts.Timeout)
-
 	chartPath, err := installAction.LocateChart(opts.Chart, h.settings)
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate chart: %w", err)
@@ -126,9 +123,37 @@ func (h *Manager) InstallChart(ctx context.Context, opts *InstallOptions) (*Rele
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	release, err := installAction.RunWithContext(ctx, chart, opts.Values)
-	if err != nil {
-		return nil, fmt.Errorf("failed to install chart: %w", err)
+	var release *release.Release
+	if releaseExists {
+		// Upgrade existing release
+		upgradeAction := action.NewUpgrade(actionConfig)
+		upgradeAction.Namespace = opts.Namespace
+		upgradeAction.Wait = opts.Wait
+		upgradeAction.Timeout = time.Duration(opts.Timeout) * time.Second
+
+		fmt.Printf("🔧 Running: helm upgrade %s %s --namespace %s --wait --timeout %ds\n",
+			opts.ReleaseName, opts.Chart, opts.Namespace, opts.Timeout)
+
+		release, err = upgradeAction.RunWithContext(ctx, opts.ReleaseName, chart, opts.Values)
+		if err != nil {
+			return nil, fmt.Errorf("failed to upgrade chart: %w", err)
+		}
+	} else {
+		// Install new release
+		installAction := action.NewInstall(actionConfig)
+		installAction.ReleaseName = opts.ReleaseName
+		installAction.Namespace = opts.Namespace
+		installAction.CreateNamespace = opts.CreateNamespace
+		installAction.Wait = opts.Wait
+		installAction.Timeout = time.Duration(opts.Timeout) * time.Second
+
+		fmt.Printf("🔧 Running: helm install %s %s --namespace %s --create-namespace --wait --timeout %ds\n",
+			opts.ReleaseName, opts.Chart, opts.Namespace, opts.Timeout)
+
+		release, err = installAction.RunWithContext(ctx, chart, opts.Values)
+		if err != nil {
+			return nil, fmt.Errorf("failed to install chart: %w", err)
+		}
 	}
 
 	return &Release{

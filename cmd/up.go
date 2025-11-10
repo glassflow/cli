@@ -66,20 +66,20 @@ func runUp(cmd *cobra.Command, args []string) error {
 		Namespace:   "glassflow",
 	})
 
-	// Always ensure clean cluster state to avoid broken installations
 	ctx := context.Background()
 	status, err := k8sManager.GetClusterStatus(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to check cluster status: %w", err)
 	}
 
-	if status.Status == "Running" {
-		return fmt.Errorf("kind cluster '%s' already exists. please run 'glassflow down' to stop and clean up before running 'glassflow up' again", cfg.KindClusterName)
-	}
-
-	// Create Kind cluster
-	if err := k8sManager.CreateCluster(ctx); err != nil {
-		return fmt.Errorf("failed to create Kind cluster: %w", err)
+	// Create Kind cluster if it doesn't exist
+	if status.Status != "Running" {
+		// Create Kind cluster
+		if err := k8sManager.CreateCluster(ctx); err != nil {
+			return fmt.Errorf("failed to create Kind cluster: %w", err)
+		}
+	} else {
+		fmt.Printf("ℹ️  Cluster '%s' already exists, proceeding with service installation...\n", cfg.KindClusterName)
 	}
 
 	// Wait for cluster to be ready (API + nodes Ready)
@@ -106,7 +106,41 @@ func runUp(cmd *cobra.Command, args []string) error {
 		Charts:    &cfg.Charts,
 	})
 
-	// Start environment
+	// Check port availability before starting installation
+	if upOptions.Demo {
+		fmt.Println("🔍 Checking required ports availability...")
+		requiredPorts := []struct {
+			port int
+			name string
+		}{
+			{30180, "GlassFlow API"},
+			{30080, "GlassFlow UI"},
+			{30090, "ClickHouse HTTP"},
+		}
+
+		var occupiedPorts []string
+		for _, p := range requiredPorts {
+			if !k8s.IsPortAvailable(p.port) {
+				occupiedPorts = append(occupiedPorts, fmt.Sprintf("%s (port %d)", p.name, p.port))
+			}
+		}
+
+		if len(occupiedPorts) > 0 {
+			fmt.Printf("⚠️  Warning: The following ports are already in use:\n")
+			for _, p := range occupiedPorts {
+				fmt.Printf("   - %s\n", p)
+			}
+			fmt.Printf("💡 The CLI will attempt to find alternative ports, but services may fail to connect.\n")
+			fmt.Printf("💡 To free up ports, stop other services using them or kill existing port-forwards:\n")
+			fmt.Printf("   pkill -f 'kubectl port-forward'\n")
+			fmt.Println()
+		} else {
+			fmt.Println("✅ All required ports are available")
+		}
+		fmt.Println()
+	}
+
+	// Start environment (installs services)
 	if err := installManager.StartEnvironment(ctx, &install.StartOptions{
 		IncludeDemo: upOptions.Demo,
 		Namespace:   "glassflow",
@@ -114,11 +148,23 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to start environment: %w", err)
 	}
 
-	// Set up port forwarding for demo mode
+	// Set up port forwarding after services are installed (needed for demo setup)
 	if upOptions.Demo {
+		// Wait for services to be ready before setting up port forwarding
+		fmt.Println("⏳ Waiting for services to be ready before port forwarding...")
+		if err := installManager.WaitForServicesReady(ctx); err != nil {
+			return fmt.Errorf("failed to wait for services: %w", err)
+		}
+
 		fmt.Println("🔗 Setting up port forwarding...")
-		if err := k8s.SetupPortForwarding(cfg.Context); err != nil {
-			fmt.Printf("⚠️  Warning: Port-forward setup issue: %v\n", err)
+		portMapping, err := k8s.SetupPortForwarding(cfg.Context)
+		if err != nil {
+			return fmt.Errorf("failed to setup port forwarding: %w", err)
+		}
+
+		// Now setup demo pipeline (table creation and pipeline creation)
+		if err := installManager.SetupDemo(ctx, portMapping); err != nil {
+			return fmt.Errorf("failed to setup demo: %w", err)
 		}
 	}
 

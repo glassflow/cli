@@ -142,3 +142,18 @@ func isNodeReady(n *corev1.Node) bool {
 	}
 	return false
 }
+
+// GetSecret retrieves a Kubernetes secret and returns its data as a map
+func (m *Manager) GetSecret(ctx context.Context, secretName, namespace string) (map[string][]byte, error) {
+	client, err := m.GetKubernetesClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get k8s client: %w", err)
+	}
+
+	secret, err := client.CoreV1().Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get secret %s/%s: %w", namespace, secretName, err)
+	}
+
+	return secret.Data, nil
+}

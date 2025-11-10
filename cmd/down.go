@@ -72,7 +72,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 
 	installManager := install.NewManager(helmManager, k8sManager, &install.Config{
 		Namespace: cfg.Namespace,
-		Demo:      true, // Assume demo was enabled TODO - remove this once we have a way to determine if demo was enabled
+		Demo:      true, // Always try to uninstall demo services if they exist
 		Charts:    &cfg.Charts,
 	})
 
