@@ -66,7 +66,7 @@ deps:
 .PHONY: run
 run: build
 	@echo "Running $(BINARY_NAME) $(ARGS)..."
-	@./$(BUILD_DIR)/$(BINARY_NAME) $(ARGS)
+	@./$(BUILD_DIR)/$(BINARY_NAME) up --demo --verbose
 
 # Show help
 .PHONY: help

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -156,11 +157,18 @@ func SetupPortForwarding(kubeContext string) (*PortMapping, error) {
 		if kubeContext != "" {
 			args = append([]string{"--context", kubeContext}, args...)
 		}
-		
+
 		// Try to start port forwarding (may fail if service not ready, we'll retry)
 		cmd := exec.Command("kubectl", args...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = nil // Suppress stderr initially, we'll handle errors in retry
+		// Redirect both stdout and stderr to /dev/null to suppress all output
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err == nil {
+			cmd.Stdout = devNull
+			cmd.Stderr = devNull
+		} else {
+			cmd.Stdout = nil
+			cmd.Stderr = nil // Fallback if /dev/null can't be opened
+		}
 		if err := cmd.Start(); err != nil {
 			// Don't fail immediately, we'll retry in the wait loop
 			fmt.Printf("⚠️  Failed to start port forwarding for %s (will retry): %v\n", cfg.name, err)
@@ -191,8 +199,15 @@ func SetupPortForwarding(kubeContext string) (*PortMapping, error) {
 
 	// Wait for port forwards to be ready with retry logic
 	fmt.Println("⏳ Waiting for port forwarding to be ready...")
-	if err := waitForPortForwardsWithRetry(kubeContext, services, actual, mapping, 2*time.Minute); err != nil {
-		return nil, fmt.Errorf("port forwarding not ready: %w", err)
+	// Increase timeout to 5 minutes and make failures non-fatal
+	if err := waitForPortForwardsWithRetry(kubeContext, services, actual, mapping, 5*time.Minute); err != nil {
+		// Log warning but don't fail - services are accessible via DNS within cluster
+		fmt.Printf("⚠️  Warning: Port forwarding not fully ready: %v\n", err)
+		fmt.Println("💡 Demo setup will continue - services are accessible via DNS within the cluster")
+		// Only fail if GlassFlow API port-forward failed (critical for demo setup)
+		if !isPortListening(mapping.GlassFlowAPI) {
+			return nil, fmt.Errorf("critical: GlassFlow API port-forward failed - demo setup requires API access")
+		}
 	}
 
 	return mapping, nil
@@ -206,9 +221,9 @@ func waitForPortForwardsWithRetry(kubeContext string, services map[string]struct
 }, actual map[string]int, mapping *PortMapping, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	ports := []struct {
-		name     string
-		port     int
-		service  string
+		name       string
+		port       int
+		service    string
 		targetPort int
 	}{
 		{"GlassFlow API", mapping.GlassFlowAPI, "glassflow-api", 8081},
@@ -219,20 +234,47 @@ func waitForPortForwardsWithRetry(kubeContext string, services map[string]struct
 	st, _ := loadPF()
 	lastRetryTime := time.Now()
 	retryInterval := 5 * time.Second
+	lastPodCheckTime := time.Now()
+	podCheckInterval := 3 * time.Second
 
 	for {
 		if time.Now().After(deadline) {
+			// Return error with details about which ports failed
+			failedPorts := []string{}
+			for _, p := range ports {
+				if !isPortListening(p.port) {
+					failedPorts = append(failedPorts, fmt.Sprintf("%s (port %d)", p.name, p.port))
+				}
+			}
+			if len(failedPorts) > 0 {
+				return fmt.Errorf("timeout waiting for port forwarding after %v - failed ports: %v", timeout, failedPorts)
+			}
 			return fmt.Errorf("timeout waiting for port forwarding after %v", timeout)
 		}
 
 		allReady := true
 		needsRetry := false
 
+		// Check if pods are ready before retrying (to avoid unnecessary retries)
+		podsReady := true
+		if time.Since(lastPodCheckTime) >= podCheckInterval {
+			lastPodCheckTime = time.Now()
+			for _, p := range ports {
+				if !isPortListening(p.port) {
+					// Check if pods for this service are ready
+					if !areServicePodsReady(kubeContext, p.service) {
+						podsReady = false
+						break
+					}
+				}
+			}
+		}
+
 		for _, p := range ports {
 			if !isPortListening(p.port) {
 				allReady = false
-				// Check if we should retry starting this port forward
-				if time.Since(lastRetryTime) >= retryInterval {
+				// Only retry if pods are ready and enough time has passed
+				if podsReady && time.Since(lastRetryTime) >= retryInterval {
 					needsRetry = true
 				}
 			}
@@ -243,11 +285,12 @@ func waitForPortForwardsWithRetry(kubeContext string, services map[string]struct
 			return nil
 		}
 
-		// Retry failed port forwards
-		if needsRetry {
+		// Retry failed port forwards (only if pods are ready)
+		if needsRetry && podsReady {
 			lastRetryTime = time.Now()
 			for _, p := range ports {
 				if !isPortListening(p.port) {
+					fmt.Printf("🔄 Retrying port forward for %s...\n", p.name)
 					// Kill any existing process for this service
 					newEntries := []portForwardEntry{}
 					for _, entry := range st.Entries {
@@ -261,7 +304,7 @@ func waitForPortForwardsWithRetry(kubeContext string, services map[string]struct
 						}
 					}
 					st.Entries = newEntries
-					
+
 					// Retry starting port forward
 					mappingStr := fmt.Sprintf("%d:%d", p.port, p.targetPort)
 					args := []string{"port-forward", "-n", "glassflow", "service/" + p.service, mappingStr}
@@ -269,11 +312,20 @@ func waitForPortForwardsWithRetry(kubeContext string, services map[string]struct
 						args = append([]string{"--context", kubeContext}, args...)
 					}
 					cmd := exec.Command("kubectl", args...)
-					cmd.Stdout = os.Stdout
-					cmd.Stderr = nil // Suppress stderr to avoid spam
+					// Redirect both stdout and stderr to /dev/null to suppress all output
+					devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+					if err == nil {
+						cmd.Stdout = devNull
+						cmd.Stderr = devNull
+					} else {
+						cmd.Stdout = nil
+						cmd.Stderr = nil // Fallback if /dev/null can't be opened
+					}
 					if err := cmd.Start(); err == nil && cmd.Process != nil {
 						st.Entries = append(st.Entries, portForwardEntry{PID: cmd.Process.Pid, Service: p.service})
 						_ = savePF(st)
+					} else {
+						fmt.Printf("⚠️  Failed to restart port forward for %s: %v\n", p.name, err)
 					}
 				}
 			}
@@ -281,6 +333,22 @@ func waitForPortForwardsWithRetry(kubeContext string, services map[string]struct
 
 		time.Sleep(1 * time.Second)
 	}
+}
+
+// areServicePodsReady checks if pods for a service are ready by checking service endpoints
+func areServicePodsReady(kubeContext string, serviceName string) bool {
+	args := []string{"get", "endpoints", "-n", "glassflow", serviceName, "-o", "jsonpath={.subsets[*].addresses[*].ip}"}
+	if kubeContext != "" {
+		args = append([]string{"--context", kubeContext}, args...)
+	}
+	cmd := exec.Command("kubectl", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	// Check if service has at least one ready endpoint (address)
+	outputStr := strings.TrimSpace(string(output))
+	return len(outputStr) > 0
 }
 
 // isPortListening checks if a port is listening (port forward is ready)

@@ -74,6 +74,22 @@ func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, 
 	fmt.Printf("📡 Sending pipeline creation request to: %s\n", url)
 	fmt.Printf("📄 Request body size: %d bytes\n", len(data))
 
+	// Debug: Log pipeline configuration
+	debugBody := make(map[string]interface{})
+	json.Unmarshal(data, &debugBody) // Ignore error, this is just for logging
+	if source, ok := debugBody["source"].(map[string]interface{}); ok {
+		if connParams, ok := source["connection_params"].(map[string]interface{}); ok {
+			if username, ok := connParams["username"].(string); ok && len(username) > 0 {
+				connParams["username"] = "[REDACTED]"
+			}
+			if password, ok := connParams["password"].(string); ok && len(password) > 0 {
+				connParams["password"] = "[REDACTED]"
+			}
+			fmt.Printf("🔍 Kafka connection config: protocol=%v, mechanism=%v, username=%v, password=%v\n",
+				connParams["protocol"], connParams["mechanism"], connParams["username"], connParams["password"])
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)

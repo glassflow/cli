@@ -3,6 +3,7 @@ package install
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -252,10 +253,33 @@ func (i *Manager) installKafka(ctx context.Context) error {
 	secretName := "kafka-user-passwords"
 	releaseName := "kafka"
 
+	// Ensure namespace exists before creating secret
+	_, err = k8sClient.CoreV1().Namespaces().Get(ctx, i.config.Namespace, metav1.GetOptions{})
+	if err != nil {
+		// Check if error is "not found" - if so, create the namespace
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "NotFound") {
+			namespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: i.config.Namespace,
+				},
+			}
+			if _, createNsErr := k8sClient.CoreV1().Namespaces().Create(ctx, namespace, metav1.CreateOptions{}); createNsErr != nil {
+				// Ignore error if namespace already exists (race condition with parallel installs)
+				if !strings.Contains(createNsErr.Error(), "already exists") {
+					fmt.Printf("⚠️  Warning: Failed to create namespace: %v\n", createNsErr)
+				}
+			}
+		} else {
+			// Other error getting namespace - log but continue (Helm will create it)
+			fmt.Printf("⚠️  Warning: Failed to check namespace: %v\n", err)
+		}
+	}
+
 	// Delete existing secret if it exists
 	_ = k8sClient.CoreV1().Secrets(i.config.Namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
 
 	// Create secret with deterministic password and Helm labels for ownership
+	// Note: Chart version in label is not critical - Helm will manage it
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
@@ -264,7 +288,7 @@ func (i *Manager) installKafka(ctx context.Context) error {
 				"app.kubernetes.io/instance":   releaseName,
 				"app.kubernetes.io/managed-by": "Helm",
 				"app.kubernetes.io/name":       "kafka",
-				"helm.sh/chart":                "kafka-32.4.3",
+				// Chart version will be managed by Helm, no need to hardcode
 			},
 			Annotations: map[string]string{
 				"meta.helm.sh/release-name":      releaseName,
@@ -287,23 +311,13 @@ func (i *Manager) installKafka(ctx context.Context) error {
 		fmt.Printf("✅ Created Kafka secret with deterministic password\n")
 	}
 
-	// Set deterministic credentials and single replica for local dev
-	// Optimized for fast demo startup
+	// Kafka installation with 3 brokers for proper replication
+	// This allows default replication factor of 3 for __consumer_offsets topic
+	// For KRaft mode, ensure controller and broker share the same cluster ID
 	values := map[string]interface{}{
-		"replicaCount": 1, // Single replica for local dev
+		"replicaCount": 3, // 3 replicas for proper replication (matches default offsets topic replication)
 		"controller": map[string]interface{}{
-			"replicaCount": 1, // Single controller for local dev (KRaft mode)
-			// Reduce controller resources for faster startup
-			"resources": map[string]interface{}{
-				"requests": map[string]interface{}{
-					"cpu":    "100m",
-					"memory": "256Mi",
-				},
-				"limits": map[string]interface{}{
-					"cpu":    "500m",
-					"memory": "512Mi",
-				},
-			},
+			"replicaCount": 3, // 3 controllers for KRaft quorum
 		},
 		"persistence": map[string]interface{}{
 			"enabled": false, // Use emptyDir for local dev
@@ -322,63 +336,8 @@ func (i *Manager) installKafka(ctx context.Context) error {
 				"existingSecret":            secretName, // Use our pre-created secret
 			},
 		},
-		// Reduce resource usage for local dev
-		"resources": map[string]interface{}{
-			"requests": map[string]interface{}{
-				"cpu":    "200m",
-				"memory": "512Mi",
-			},
-			"limits": map[string]interface{}{
-				"cpu":    "1000m",
-				"memory": "2Gi",
-			},
-		},
-		// Optimize JVM heap size for faster startup
-		"extraEnvVars": []map[string]interface{}{
-			{
-				"name":  "KAFKA_HEAP_OPTS",
-				"value": "-Xmx512M -Xms512M", // Match memory request for faster JVM startup
-			},
-			// Reduce log retention for demo (1 hour instead of 7 days)
-			{
-				"name":  "KAFKA_LOG_RETENTION_HOURS",
-				"value": "1",
-			},
-			{
-				"name":  "KAFKA_LOG_RETENTION_BYTES",
-				"value": "1073741824", // 1GB max retention
-			},
-			{
-				"name":  "KAFKA_LOG_SEGMENT_BYTES",
-				"value": "104857600", // 100MB segments (smaller = faster cleanup)
-			},
-		},
-		// Disable metrics for demo to reduce resource usage
-		"metrics": map[string]interface{}{
-			"enabled": false,
-		},
-		// Disable JMX for demo
-		"jmx": map[string]interface{}{
-			"enabled": false,
-		},
-		// Optimize startup/readiness probes for faster detection
-		"startupProbe": map[string]interface{}{
-			"enabled":             true,
-			"initialDelaySeconds": 10, // Reduced from default 30s
-			"periodSeconds":       5,
-			"timeoutSeconds":      5,
-			"failureThreshold":    12, // 60s total timeout
-		},
-		"readinessProbe": map[string]interface{}{
-			"initialDelaySeconds": 5, // Reduced from default 10s
-			"periodSeconds":       5,
-			"timeoutSeconds":      3,
-		},
-		"livenessProbe": map[string]interface{}{
-			"initialDelaySeconds": 30, // Keep reasonable for liveness
-			"periodSeconds":       10,
-			"timeoutSeconds":      5,
-		},
+		// Note: Bitnami chart auto-generates controller quorum voters based on controller.replicaCount
+		// No need to explicitly set KAFKA_CFG_CONTROLLER_QUORUM_VOTERS
 	}
 
 	_, err = i.helmManager.InstallChart(ctx, &helm.InstallOptions{
@@ -512,6 +471,7 @@ func (i *Manager) WaitForServicesReady(ctx context.Context) error {
 }
 
 // waitForKafkaAndClickHouse polls until both Kafka and ClickHouse pods are ready
+// Also ensures Kafka broker is actually accepting connections
 func (i *Manager) waitForKafkaAndClickHouse(ctx context.Context) error {
 	k8sClient, err := i.k8sManager.GetKubernetesClient()
 	if err != nil {
@@ -523,6 +483,9 @@ func (i *Manager) waitForKafkaAndClickHouse(ctx context.Context) error {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
+	kafkaReadyCount := 0
+	clickhouseReadyCount := 0
+
 	for {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timeout waiting for Kafka and ClickHouse to be ready after %v", timeout)
@@ -533,7 +496,21 @@ func (i *Manager) waitForKafkaAndClickHouse(ctx context.Context) error {
 		// Check ClickHouse readiness
 		clickhouseReady := i.checkPodsReady(ctx, k8sClient, "app.kubernetes.io/name=clickhouse")
 
-		if kafkaReady && clickhouseReady {
+		if kafkaReady {
+			kafkaReadyCount++
+		} else {
+			kafkaReadyCount = 0
+		}
+
+		if clickhouseReady {
+			clickhouseReadyCount++
+		} else {
+			clickhouseReadyCount = 0
+		}
+
+		// Require pods to be ready for at least 3 consecutive checks (6 seconds)
+		// This ensures Kafka coordinator is fully initialized
+		if kafkaReadyCount >= 3 && clickhouseReadyCount >= 3 {
 			fmt.Println("✅ Kafka and ClickHouse are ready")
 			return nil
 		}
@@ -609,10 +586,7 @@ func (i *Manager) setupDemo(ctx context.Context, portMapping *k8s.PortMapping) e
 		return fmt.Errorf("failed to wait for services to be ready: %w", err)
 	}
 
-	// Note: Port forwarding readiness is already checked in SetupPortForwarding()
-
 	// Step 1: Create ClickHouse table
-	// Use deterministic ClickHouse password (try secret first, fallback to constant)
 	clickhousePassword := DemoClickHousePassword
 	if secret, err := i.k8sManager.GetSecret(ctx, "clickhouse", i.config.Namespace); err == nil {
 		if pwd, ok := secret["admin-password"]; ok && len(pwd) > 0 {
@@ -626,18 +600,61 @@ func (i *Manager) setupDemo(ctx context.Context, portMapping *k8s.PortMapping) e
 		return fmt.Errorf("failed to create ClickHouse table: %w", err)
 	}
 
-	// Step 2: Create pipeline via GlassFlow API
-	// Use deterministic Kafka password (Bitnami chart may generate random passwords in secret)
-	// Use our constant password instead of reading from secret to ensure consistency
+	// // Step 2: Verify Kafka coordinator is ready and create topic before creating pipeline
+	// fmt.Println("⏳ Verifying Kafka coordinator is ready...")
+	// if err := i.waitForKafkaCoordinator(ctx); err != nil {
+	// 	fmt.Printf("⚠️  Warning: Kafka coordinator check failed: %v\n", err)
+	// 	fmt.Println("💡 Continuing with pipeline creation - will retry if coordinator not ready")
+	// }
+
+	// Step 3: Create pipeline via GlassFlow API with continuous polling
+	// This handles transient errors like coordinator not ready, API not ready, etc.
 	kafkaPassword := DemoKafkaPassword
 
 	apiURL := fmt.Sprintf("http://localhost:%d", portMapping.GlassFlowAPI)
 	apiClient := demo.NewAPIClient(apiURL)
-	if err := apiClient.CreatePipeline(ctx, pipelineJSONPath, DemoKafkaUsername, kafkaPassword, DemoClickHouseUsername, DemoClickHousePassword); err != nil {
-		return fmt.Errorf("failed to create pipeline: %w", err)
+
+	// Poll continuously with exponential backoff (capped at 10s)
+	// Total timeout: ~5 minutes (with exponential backoff)
+	maxTimeout := 5 * time.Minute
+	startTime := time.Now()
+	retryDelay := 2 * time.Second
+	maxRetryDelay := 10 * time.Second
+	attempt := 0
+
+	fmt.Print("⏳ Creating pipeline via GlassFlow API")
+	for {
+		attempt++
+
+		// Check timeout
+		elapsed := time.Since(startTime)
+		if elapsed > maxTimeout {
+			fmt.Printf("\n")
+			return fmt.Errorf("pipeline creation timed out after %v (attempted %d times)", maxTimeout, attempt)
+		}
+
+		// Try to create pipeline
+		err := apiClient.CreatePipeline(ctx, pipelineJSONPath, DemoKafkaUsername, kafkaPassword, DemoClickHouseUsername, DemoClickHousePassword)
+		if err == nil {
+			// Success
+			fmt.Printf("\n✅ Pipeline created successfully (after %d attempts, %v elapsed)\n", attempt, elapsed.Round(time.Second))
+			break
+		}
+
+		// Show polling indicator every few attempts to show it's still working
+		if attempt%3 == 0 {
+			fmt.Print(".")
+		}
+
+		// Wait before retry with exponential backoff (capped)
+		time.Sleep(retryDelay)
+		retryDelay *= 2
+		if retryDelay > maxRetryDelay {
+			retryDelay = maxRetryDelay
+		}
 	}
 
-	// Step 3: Create Kafka producer deployment (runs continuously)
+	// Step 4: Create Kafka producer deployment (runs continuously)
 	k8sClient, err := i.k8sManager.GetKubernetesClient()
 	if err != nil {
 		return fmt.Errorf("failed to get k8s client: %w", err)
@@ -653,7 +670,7 @@ func (i *Manager) setupDemo(ctx context.Context, portMapping *k8s.PortMapping) e
 		"demo-events",
 		DemoKafkaUsername,
 		producerKafkaPassword,
-		100, // Produce 1 message per second
+		1, // Produce 1 message per second
 	); err != nil {
 		return fmt.Errorf("failed to create Kafka producer deployment: %w", err)
 	}
