@@ -9,6 +9,9 @@ import (
 var (
 	verbose    bool
 	configPath string
+	version    string
+	commit     string
+	date       string
 )
 
 var rootCmd = &cobra.Command{
@@ -17,7 +20,10 @@ var rootCmd = &cobra.Command{
 	Long:  `GlassFlow CLI provides a local development environment with Kind cluster and demo data.`,
 }
 
-func Execute() {
+func Execute(v, c, d string) {
+	version = v
+	commit = c
+	date = d
 	err := rootCmd.Execute()
 	if err != nil {
 		os.Exit(1)

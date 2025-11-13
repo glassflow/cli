@@ -1,0 +1,38 @@
+---
+name: Package and release CLI
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    # Optional: Add environment protection if needed
+    # environment: cli-release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:          
+          # Homebrew formula updates are done manually
+          GLASSFLOW_CLI_AUTH0_CLIENT_ID: ${{ secrets.GLASSFLOW_CLI_AUTH0_CLIENT_ID }}
+

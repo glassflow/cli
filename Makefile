@@ -68,16 +68,37 @@ run: build
 	@echo "Running $(BINARY_NAME) $(ARGS)..."
 	@./$(BUILD_DIR)/$(BINARY_NAME) up --demo --verbose
 
+# Install GoReleaser
+.PHONY: goreleaser-install
+goreleaser-install:
+	@echo "Installing GoReleaser..."
+	@go install github.com/goreleaser/goreleaser@latest
+
+# Run GoReleaser (for local testing with --snapshot)
+.PHONY: goreleaser-release
+goreleaser-release:
+	@echo "Running GoReleaser..."
+	@goreleaser release --clean
+
+# Run GoReleaser snapshot (for local testing)
+.PHONY: goreleaser-snapshot
+goreleaser-snapshot:
+	@echo "Running GoReleaser snapshot..."
+	@goreleaser release --snapshot --clean
+
 # Show help
 .PHONY: help
 help:
 	@echo "Available targets:"
-	@echo "  build      - Build the CLI binary"
-	@echo "  build-all  - Build for multiple platforms"
-	@echo "  clean      - Clean build artifacts"
-	@echo "  test       - Run tests"
-	@echo "  lint       - Run linter"
-	@echo "  fmt        - Format code"
-	@echo "  deps       - Install dependencies"
-	@echo "  run        - Build and run the CLI (use ARGS='command' to pass arguments)"
-	@echo "  help       - Show this help"
+	@echo "  build              - Build the CLI binary"
+	@echo "  build-all          - Build for multiple platforms"
+	@echo "  clean              - Clean build artifacts"
+	@echo "  test               - Run tests"
+	@echo "  lint               - Run linter"
+	@echo "  fmt                - Format code"
+	@echo "  deps               - Install dependencies"
+	@echo "  run                - Build and run the CLI (use ARGS='command' to pass arguments)"
+	@echo "  goreleaser-install - Install GoReleaser"
+	@echo "  goreleaser-release - Run GoReleaser release (requires GITHUB_TOKEN)"
+	@echo "  goreleaser-snapshot - Run GoReleaser snapshot (for local testing)"
+	@echo "  help               - Show this help"
