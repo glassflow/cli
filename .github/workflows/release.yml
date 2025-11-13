@@ -32,7 +32,10 @@ jobs:
           distribution: goreleaser
           version: latest
           args: release --clean
-        env:          
+        env:
+          # GITHUB_TOKEN is automatically provided by GitHub Actions
+          # It has access to the current repository (glassflow/cli)
+          # This is sufficient for creating releases
           # Homebrew formula updates are done manually
-          GLASSFLOW_CLI_AUTH0_CLIENT_ID: ${{ secrets.GLASSFLOW_CLI_AUTH0_CLIENT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
