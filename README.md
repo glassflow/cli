@@ -2,117 +2,103 @@
   <img src="https://docs.glassflow.dev/~gitbook/image?url=https%3A%2F%2F1082326815-files.gitbook.io%2F%7E%2Ffiles%2Fv0%2Fb%2Fgitbook-x-prod.appspot.com%2Fo%2Forganizations%252FaR82XtsD8fLEkzPmMtb7%252Fsites%252Fsite_8vNM9%252Flogo%252Fft4nLD8mKhRmqTJjDp3i%252Flogo-color.png%3Falt%3Dmedia%26token%3Deb19e3bf-195b-413f-9965-4c76112953a3&width=128&dpr=3&quality=100&sign=10efaa8d&sv=1" /><br /><br />
 </div>
 <p align="center">
-<a href="https://join.slack.com/t/glassflowhub/shared_invite/zt-2g3s6nhci-bb8cXP9g9jAQ942gHP5tqg">
+<a href="https://join.slack.com/t/glassflowhub/shared_invite/zt-349m7lenp-IFeKSGfQwpJfIiQ7oyFFKg">
         <img src="https://img.shields.io/badge/slack-join-community?logo=slack&amp;logoColor=white&amp;style=flat"
             alt="Chat on Slack"></a>
+<a href="https://github.com/glassflow/clickhouse-etl">
+        <img src="https://img.shields.io/badge/GitHub-clickhouse--etl-blue?logo=github"
+            alt="GlassFlow ETL"></a>
 
 # GlassFlow CLI
 
-The GlassFlow Command Line Interface (CLI) simplifies the process of creating, managing, and monitoring your data pipelines on the GlassFlow platform. It's built for developers, data engineers, and IT professionals who prefer working within a command-line environment to automate tasks and streamline their workflow. The CLI directly interacts with the [GlassFlow API](https://api.glassflow.xyz/v1/docs) for pipeline management.
+**Local development environment for GlassFlow ETL**
 
-## Features
+The GlassFlow CLI provides a quick way to set up a local development environment for exploring and testing [GlassFlow](https://github.com/glassflow/clickhouse-etl) - an open-source ETL tool for real-time data processing from Kafka to ClickHouse.
 
-- **Pipeline Management**: Create, update, delete, and list organizations, spaces, and data pipelines.
-- **Real-Time Data Processing**: Send data to and consume data from your pipelines.
-- **Monitoring and Logs**: Access real-time logs and monitor the performance of your pipelines.
-- **Secure Authentication**: Manage your GlassFlow credentials securely.
+> **Note**: This CLI is designed for **local testing, demos, and exploration only**. For production deployments, use the [official GlassFlow Helm charts](https://github.com/glassflow/charts).
 
-## Installation
+## ⚡️ Quick Start
 
-The CLI is available for **macOS, Linux, and Windows** OS, and can be installed using standard package managers like [Homebrew](https://brew.sh/).
+### Prerequisites
 
+- **Docker** (or compatible runtime like Docker Desktop, OrbStack, Colima, or Podman)
+- **kubectl** (installed automatically via Homebrew, or install manually)
 
-### Install using Homebrew
+### Installation
 
-Install the GlassFlow CLI using the Homebrew:
+#### Install via Homebrew (Recommended)
 
 ```bash
 brew tap glassflow/tap
 brew install glassflow
 ```
 
-This installs the GlassFlow command globally so you can run `glassflow`commands from any directory.
+#### Install from GitHub Releases
 
-### Install from the release package
+Download the latest release for your platform from [GitHub Releases](https://github.com/glassflow/cli/releases).
 
-For **Linux** based systems, we support installation by downloading the release version via GitHub:
+### Usage
 
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/glassflow/cli/master/install.sh)"
-```
-
-To install the CLI on **Windows** OS, follow the [guide in the documentation](https://docs.glassflow.dev/get-started/glassflow-cli#for-windows).
-
-## Sign Up
-
-After installing the CLI, simply open your terminal and run the following command to create an account on GlassFlow:
+Start the local development environment with demo data:
 
 ```bash
-glassflow signup
+glassflow up --demo
 ```
 
-Upon executing this command, you'll be prompted to choose your preferred method of signup—either using your Google account or via GitHub authentication.
+This command will:
+- Create a local Kubernetes cluster using [Kind](https://kind.sigs.k8s.io/)
+- Install Kafka, ClickHouse, and GlassFlow using Helm charts
+- Set up a demo pipeline with sample data
+- Configure port forwarding for UI and API access
 
-## Getting Help
+Once started, you can access:
+- **GlassFlow UI**: http://localhost:30080
+- **GlassFlow API**: http://localhost:30180
+- **ClickHouse HTTP**: http://localhost:30090
 
-Open your terminal and type `glassflow --help` to see a list of available commands and options. This command provides a quick reference to the capabilities of the CLI, including creating, removing, and managing your account, organization, space, and pipelines.
-
-The general form of the CLI usage is:
+Stop the environment:
 
 ```bash
-glassflow --helpglassflow command [subcommand] [options]
+glassflow down
 ```
+
+## What Gets Installed
+
+When running `glassflow up --demo`, the CLI installs:
+
+- **Kind**: Local Kubernetes cluster
+- **Kafka**: Message broker (Bitnami Helm chart)
+- **ClickHouse**: Columnar database (Bitnami Helm chart)
+- **GlassFlow ETL**: Real-time streaming ETL service (GlassFlow Helm chart)
+- **Demo Pipeline**: Pre-configured pipeline with sample data
+
+## Commands
 
 ```bash
-$ glassflow --help
+# Start local environment with demo
+glassflow up --demo
 
-Usage: glassflow [OPTIONS] COMMAND [arg...]
+# Stop and clean up environment
+glassflow down
 
-GlassFlow - Python-based data streaming pipelines within minutes.
+# Show version
+glassflow version
 
-Options:
-      --version   Show the version and exit
-  -v, --verbose   Verbose output
-
-Commands:
-  signup          Create new account
-  login           Log in to GlassFlow
-  profile         Get profile data
-  logout          Log out from GlassFlow
-  organization    Manage organizations
-  space           Manage spaces
-  pipeline        Manage pipelines
-  version         Show the version
+# Get help
+glassflow --help
 ```
 
-You can also see available subcommands for a given command by running `glassflow command --help`. For example:
+## Production Deployment
 
-```bash
-$ glassflow pipeline --help
+For production use, deploy GlassFlow using the official Helm charts:
 
-Usage: glassflow pipeline [OPTIONS] COMMAND [arg...]
+- **Helm Charts Repository**: [github.com/glassflow/charts](https://github.com/glassflow/charts)
+- **Installation Guide**: [docs.glassflow.dev/installation/kubernetes](https://docs.glassflow.dev/installation/kubernetes)
 
-Manage pipelines
+## Resources
 
-Options:
+- **GlassFlow ETL**: [github.com/glassflow/clickhouse-etl](https://github.com/glassflow/clickhouse-etl)
+- **Documentation**: [docs.glassflow.dev](https://docs.glassflow.dev)
+- **Slack Community**: [Join GlassFlow Hub](https://glassflowhub.slack.com/join/shared_invite/zt-349m7lenp-IFeKSGfQwpJfIiQ7oyFFKg#/shared-invite/email)
+- **Helm Charts**: [github.com/glassflow/charts](https://github.com/glassflow/charts)
 
-Commands:
-  list              Get pipelines
-  create            Create pipeline
-  get               Get pipeline
-  delete            Delete pipeline
-  update-function   Update function
-  logs              Get function logs
-  tokens            Get list of access tokens
-  token-generate    Generate new access token
-  token-rename      Rename access token
-  token-revoke      Revoke access token
-```
-
-## Examples
-
-Visit the [GlassFlow examples](https://github.com/glassflow/glassflow-examples) repository to explore how to build new pipelines using CLI.
-
-## User Guides
-
-For more detailed information on how to use the GlassFlow CLI, please refer to the [GlassFlow Documentation](https://learn.glassflow.dev/). The documentation provides comprehensive guides, tutorials, and examples to help you get started with GlassFlow CLI.
