@@ -1,0 +1,35 @@
+kubeconfig: ""
+context: ""
+namespace: "glassflow"
+verbose: false
+kind_cluster_name: "glassflow"
+
+charts:
+  glassflow:
+    repository: "https://glassflow.github.io/charts"
+    chart: "glassflow/glassflow-etl"
+    version: "latest"
+  nats:
+    repository: "https://nats-io.github.io/k8s/helm/charts"
+    chart: "nats/nats"
+    version: "latest"
+  kafka:
+    repository: "https://charts.bitnami.com/bitnami"
+    chart: "bitnami/kafka"
+    version: "latest"
+    image:
+      registry: "docker.io"
+      repository: "bitnamilegacy/kafka"
+    zookeeper:
+      registry: "docker.io"
+      repository: "bitnamilegacy/zookeeper"
+  clickhouse:
+    repository: "https://charts.bitnami.com/bitnami"
+    chart: "bitnami/clickhouse"
+    version: "latest"
+    image:
+      registry: "docker.io"
+      repository: "bitnamilegacy/clickhouse"
+    keeper:
+      registry: "docker.io"
+      repository: "bitnamilegacy/clickhouse-keeper"

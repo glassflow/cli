@@ -1,0 +1,83 @@
+# GoReleaser configuration for GlassFlow CLI
+# https://goreleaser.com
+---
+project_name: glassflow
+
+# Build configuration
+builds:
+  - id: glassflow
+    main: ./main.go
+    binary: glassflow
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+# Archive configuration
+archives:
+  - id: default
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: "{{ .ProjectName }}-cli-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - README.md
+    builds:
+      - glassflow
+
+# Checksums
+checksum:
+  name_template: "checksums.txt"
+
+# Homebrew tap configuration
+# NOTE: Homebrew updates are done manually for now
+# To enable automation, uncomment below and configure GitHub App token
+# homebrew:
+#   tap:
+#     owner: glassflow
+#     name: homebrew-tap
+#   homepage: "https://www.glassflow.dev/"
+#   description: |
+#     GlassFlow CLI for local development environment.
+#     Requires Docker (or compatible runtime) and kubectl.
+#   dependencies:
+#     - name: kubectl
+#   test: |
+#     system "#{bin}/glassflow", "--version"
+#   commit_author:
+#     name: glassflow[bot]
+#     email: glassflow[bot]@users.noreply.github.com
+
+# GitHub release configuration
+release:
+  github:
+    owner: glassflow
+    name: cli
+  mode: replace
+  header: |
+    ## GlassFlow CLI {{ .Tag }}
+
+    See the [changelog](https://github.com/glassflow/cli/releases) for details.
+
+# Changelog
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+

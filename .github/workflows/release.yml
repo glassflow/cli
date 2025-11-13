@@ -1,0 +1,41 @@
+---
+name: Package and release CLI
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    # Optional: Add environment protection if needed
+    # environment: cli-release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          # GITHUB_TOKEN is automatically provided by GitHub Actions
+          # It has access to the current repository (glassflow/cli)
+          # This is sufficient for creating releases
+          # Homebrew formula updates are done manually
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

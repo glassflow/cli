@@ -1,0 +1,17 @@
+# Binaries for programs and plugins
+glassflow
+
+# Dependency directories (remove the comment below to include it)
+vendor/
+
+# Build directory
+build/
+dist/
+
+# IDE files
+.vscode/
+.idea/
+*.code-workspace
+
+# Logs
+*.log
