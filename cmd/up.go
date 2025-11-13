@@ -101,9 +101,10 @@ func runUp(cmd *cobra.Command, args []string) error {
 	})
 
 	installManager := install.NewManager(helmManager, k8sManager, &install.Config{
-		Namespace: "glassflow",
-		Demo:      upOptions.Demo,
-		Charts:    &cfg.Charts,
+		Namespace:   "glassflow",
+		Demo:        upOptions.Demo,
+		Charts:      &cfg.Charts,
+		KubeContext: cfg.Context,
 	})
 
 	// Check port availability before starting installation

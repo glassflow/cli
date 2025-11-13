@@ -361,6 +361,62 @@ func isPortListening(port int) bool {
 	return true
 }
 
+// RestartPortForwardForService restarts port forwarding for a specific service
+// This is useful when a pod restarts and the port forward connection is lost
+func RestartPortForwardForService(kubeContext string, serviceName string, port int, targetPort int) error {
+	st, err := loadPF()
+	if err != nil {
+		return fmt.Errorf("failed to load port-forward state: %w", err)
+	}
+
+	// Kill any existing process for this service
+	newEntries := []portForwardEntry{}
+	for _, entry := range st.Entries {
+		if entry.Service == serviceName {
+			if proc, err := os.FindProcess(entry.PID); err == nil {
+				_ = proc.Kill()
+			}
+			// Don't add to newEntries (effectively removing it)
+		} else {
+			newEntries = append(newEntries, entry)
+		}
+	}
+	st.Entries = newEntries
+
+	// Start new port forward
+	mappingStr := fmt.Sprintf("%d:%d", port, targetPort)
+	args := []string{"port-forward", "-n", "glassflow", "service/" + serviceName, mappingStr}
+	if kubeContext != "" {
+		args = append([]string{"--context", kubeContext}, args...)
+	}
+
+	cmd := exec.Command("kubectl", args...)
+	// Redirect both stdout and stderr to /dev/null to suppress all output
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err == nil {
+		cmd.Stdout = devNull
+		cmd.Stderr = devNull
+	} else {
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start port forward: %w", err)
+	}
+
+	if cmd.Process != nil {
+		st.Entries = append(st.Entries, portForwardEntry{PID: cmd.Process.Pid, Service: serviceName})
+		if err := savePF(st); err != nil {
+			return fmt.Errorf("failed to save port-forward state: %w", err)
+		}
+	}
+
+	// Give it a moment to establish the connection
+	time.Sleep(1 * time.Second)
+	return nil
+}
+
 // CleanupPortForwarding kills only the port-forwards started by this CLI using stored PIDs.
 func CleanupPortForwarding(verbose bool) {
 	st, err := loadPF()

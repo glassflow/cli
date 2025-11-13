@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,26 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// ConnectionError represents a connection failure that might indicate port forwarding is down
+type ConnectionError struct {
+	Err error
+	URL string
+}
+
+func (e *ConnectionError) Error() string {
+	return fmt.Sprintf("connection error to %s: %v", e.URL, e.Err)
+}
+
+func (e *ConnectionError) Unwrap() error {
+	return e.Err
+}
+
+// IsConnectionError checks if an error is a ConnectionError
+func IsConnectionError(err error) bool {
+	var connErr *ConnectionError
+	return errors.As(err, &connErr)
+}
 
 // APIClient handles communication with GlassFlow API
 type APIClient struct {
@@ -100,6 +121,17 @@ func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, 
 	// Send request
 	resp, err := c.client.Do(req)
 	if err != nil {
+		// Check if it's a connection error (could indicate port forward is down)
+		errStr := err.Error()
+		isConnectionError := strings.Contains(errStr, "connection refused") ||
+			strings.Contains(errStr, "dial tcp") ||
+			strings.Contains(errStr, "no such host") ||
+			strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "connect: connection refused")
+
+		if isConnectionError {
+			return &ConnectionError{Err: err, URL: url}
+		}
 		return fmt.Errorf("failed to send request to %s: %w", url, err)
 	}
 	defer resp.Body.Close()

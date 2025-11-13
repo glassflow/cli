@@ -62,9 +62,10 @@ func runSetupDemo(cmd *cobra.Command, args []string) error {
 	})
 
 	installManager := install.NewManager(helmManager, k8sManager, &install.Config{
-		Namespace: "glassflow",
-		Demo:      true,
-		Charts:    &cfg.Charts,
+		Namespace:   "glassflow",
+		Demo:        true,
+		Charts:      &cfg.Charts,
+		KubeContext: cfg.Context,
 	})
 
 	// Set up port forwarding

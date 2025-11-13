@@ -35,9 +35,10 @@ type Manager struct {
 }
 
 type Config struct {
-	Namespace string
-	Demo      bool
-	Charts    *config.ChartsConfig
+	Namespace   string
+	Demo        bool
+	Charts      *config.ChartsConfig
+	KubeContext string // For port forwarding restarts
 }
 
 type StartOptions struct {
@@ -639,6 +640,18 @@ func (i *Manager) setupDemo(ctx context.Context, portMapping *k8s.PortMapping) e
 			// Success
 			fmt.Printf("\n✅ Pipeline created successfully (after %d attempts, %v elapsed)\n", attempt, elapsed.Round(time.Second))
 			break
+		}
+
+		// Check if it's a connection error - might indicate port forward is down
+		if demo.IsConnectionError(err) {
+			fmt.Printf("\n🔄 Connection error detected, restarting port forwarding for GlassFlow API...\n")
+			if restartErr := k8s.RestartPortForwardForService(i.config.KubeContext, "glassflow-api", portMapping.GlassFlowAPI, 8081); restartErr != nil {
+				fmt.Printf("⚠️  Failed to restart port forwarding: %v\n", restartErr)
+			} else {
+				fmt.Printf("✅ Port forwarding restarted, retrying request...\n")
+			}
+			// Wait a bit longer after restarting port forward
+			time.Sleep(2 * time.Second)
 		}
 
 		// Show polling indicator every few attempts to show it's still working
