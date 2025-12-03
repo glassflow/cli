@@ -12,7 +12,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/glassflow/glassflow-cli/internal/github"
 )
+
+// version is set by SetVersion and used for downloading files from GitHub
+var version string = "dev"
+
+// SetVersion sets the version for downloading files from GitHub
+func SetVersion(v string) {
+	version = v
+}
 
 // ConnectionError represents a connection failure that might indicate port forwarding is down
 type ConnectionError struct {
@@ -167,6 +177,7 @@ func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, 
 }
 
 // LoadPipelineRequestPath returns the path to the demo pipeline request JSON
+// If not found locally, it downloads from GitHub
 func LoadPipelineRequestPath() (string, error) {
 	// Try to find demo/demo_pipeline_request.json relative to current working directory
 	// or in common locations
@@ -185,7 +196,9 @@ func LoadPipelineRequestPath() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("demo_pipeline_request.json not found in demo directory")
+	// If not found locally, download from GitHub
+	fmt.Println("📥 Downloading demo_pipeline_request.json from GitHub...")
+	return github.DownloadPipelineRequest(version)
 }
 
 func contains(s, substr string) bool {

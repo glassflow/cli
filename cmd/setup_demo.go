@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/glassflow/glassflow-cli/internal/config"
+	"github.com/glassflow/glassflow-cli/internal/demo"
 	"github.com/glassflow/glassflow-cli/internal/helm"
 	"github.com/glassflow/glassflow-cli/internal/install"
 	"github.com/glassflow/glassflow-cli/internal/k8s"
@@ -23,10 +24,13 @@ func init() {
 }
 
 func runSetupDemo(cmd *cobra.Command, args []string) error {
+	// Set version for demo package to use for GitHub downloads
+	demo.SetVersion(version)
+
 	fmt.Println("🎬 Setting up demo pipeline...")
 
 	// Load configuration
-	cfg, err := config.Load(configPath)
+	cfg, err := config.Load(configPath, version)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}

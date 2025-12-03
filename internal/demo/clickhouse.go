@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/glassflow/glassflow-cli/internal/github"
 )
 
 // ClickHouseClient handles communication with ClickHouse HTTP API
@@ -110,6 +112,7 @@ func (c *ClickHouseClient) CreateTable(ctx context.Context, sqlFilePath string) 
 }
 
 // LoadClickHouseSQLPath returns the path to the ClickHouse SQL file
+// If not found locally, it downloads from GitHub
 func LoadClickHouseSQLPath() (string, error) {
 	// Try to find demo/clickhouse_table.sql relative to current working directory
 	paths := []string{
@@ -127,5 +130,7 @@ func LoadClickHouseSQLPath() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("clickhouse_table.sql not found in demo directory")
+	// If not found locally, download from GitHub
+	fmt.Println("📥 Downloading clickhouse_table.sql from GitHub...")
+	return github.DownloadClickHouseSQL(version)
 }

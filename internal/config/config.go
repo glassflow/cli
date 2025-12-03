@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/glassflow/glassflow-cli/internal/github"
 	"github.com/spf13/viper"
 )
 
@@ -38,7 +39,7 @@ type ImageConfig struct {
 	Repository string `mapstructure:"repository"`
 }
 
-func Load(configPath string) (*Config, error) {
+func Load(configPath, version string) (*Config, error) {
 	// Configure Viper based on explicit path or fallback to repo-level config.yaml
 	if configPath != "" {
 		viper.SetConfigFile(configPath)
@@ -48,8 +49,24 @@ func Load(configPath string) (*Config, error) {
 		viper.AddConfigPath(".")
 	}
 
+	// Try to read config file, if it fails, download from GitHub
 	if err := viper.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		// If no explicit path and file not found, download from GitHub
+		if configPath == "" {
+			fmt.Println("📥 Downloading config.yaml from GitHub...")
+			downloadedPath, err := github.DownloadConfig(version)
+			if err != nil {
+				return nil, fmt.Errorf("failed to download config from GitHub: %w", err)
+			}
+			// Clean up temp file after reading
+			defer os.Remove(downloadedPath)
+			viper.SetConfigFile(downloadedPath)
+			if err := viper.ReadInConfig(); err != nil {
+				return nil, fmt.Errorf("failed to read downloaded config: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("failed to read config file: %w", err)
+		}
 	}
 
 	var config Config
