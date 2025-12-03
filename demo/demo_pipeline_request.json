@@ -15,27 +15,6 @@
       {
         "name": "demo-events",
         "id": "demo-events",
-        "schema": {
-          "type": "json",
-          "fields": [
-            {
-              "name": "event_id",
-              "type": "string"
-            },
-            {
-              "name": "type",
-              "type": "string"
-            },
-            {
-              "name": "source",
-              "type": "string"
-            },
-            {
-              "name": "created_at",
-              "type": "string"
-            }
-          ]
-        },
         "consumer_group_initial_offset": "earliest",
         "replicas": 1,
         "deduplication": {
@@ -62,34 +41,40 @@
     "password": "",
     "table": "demo_events",
     "secure": false,
-    "table_mapping": [
+    "max_batch_size": 100,
+    "max_delay_time": "10s",
+    "skip_certificate_verification": true
+  },
+  "schema": {
+    "fields": [
       {
         "source_id": "demo-events",
-        "field_name": "event_id",
+        "name": "event_id",
+        "type": "string",
         "column_name": "event_id",
         "column_type": "UUID"
       },
       {
         "source_id": "demo-events",
-        "field_name": "type",
+        "name": "type",
+        "type": "string",
         "column_name": "type",
         "column_type": "String"
       },
       {
         "source_id": "demo-events",
-        "field_name": "source",
+        "name": "source",
+        "type": "string",
         "column_name": "source",
         "column_type": "String"
       },
       {
         "source_id": "demo-events",
-        "field_name": "created_at",
+        "name": "created_at",
+        "type": "string",
         "column_name": "created_at",
         "column_type": "DateTime"
       }
-    ],
-    "max_batch_size": 100,
-    "max_delay_time": "10s",
-    "skip_certificate_verification": true
+    ]
   }
 }
