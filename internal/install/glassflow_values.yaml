@@ -12,6 +12,11 @@ global:
   stream:
       maxAge: 24h
       maxBytes: 0
+  pipelines:
+    namespace:
+      auto: false
+      name: glassflow-pipelines
+      create: true
 
 nats:  
   enabled: true

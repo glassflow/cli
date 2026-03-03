@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -148,49 +150,46 @@ func SetupPortForwarding(kubeContext string) (*PortMapping, error) {
 	st, _ := loadPF()
 
 	// Start port forwarding with retry logic for services that aren't ready yet
+	// If preferred port is already listening (e.g. from a previous 'glassflow up'), reuse it and don't start a duplicate
 	for svc, cfg := range services {
+		if isPortListening(cfg.preferredPort) {
+			actual[svc] = cfg.preferredPort
+			continue
+		}
 		port := findAvailablePort(cfg.preferredPort)
 		if port == 0 {
 			return nil, fmt.Errorf("no available ports found for %s (tried %d-%d)", cfg.name, cfg.preferredPort, cfg.preferredPort+99)
 		}
-		actual[svc] = port
 		mapping := fmt.Sprintf("%d:%d", port, cfg.targetPort)
 		args := []string{"port-forward", "-n", cfg.namespace, "service/" + svc, mapping}
 		if kubeContext != "" {
 			args = append([]string{"--context", kubeContext}, args...)
 		}
 
-		// Try to start port forwarding (may fail if service not ready, we'll retry)
 		cmd := exec.Command("kubectl", args...)
-		// Redirect both stdout and stderr to /dev/null to suppress all output
 		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 		if err == nil {
 			cmd.Stdout = devNull
 			cmd.Stderr = devNull
 		} else {
 			cmd.Stdout = nil
-			cmd.Stderr = nil // Fallback if /dev/null can't be opened
+			cmd.Stderr = nil
+		}
+		// Detach so port-forward keeps running after CLI exits (Unix only)
+		if runtime.GOOS != "windows" {
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		}
 		if err := cmd.Start(); err != nil {
-			// Don't fail immediately, we'll retry in the wait loop
 			fmt.Printf("⚠️  Failed to start port forwarding for %s (will retry): %v\n", cfg.name, err)
-		} else if cmd.Process != nil {
+			continue
+		}
+		if cmd.Process != nil {
 			st.Entries = append(st.Entries, portForwardEntry{PID: cmd.Process.Pid, Service: svc})
 			_ = savePF(st)
+			// Release so CLI doesn't hold the process; port-forward keeps running after exit
+			_ = cmd.Process.Release()
 		}
-	}
-
-	fmt.Printf("🔗 Port forwarding established:\n")
-	if p, ok := actual["glassflow-ui"]; ok {
-		fmt.Printf("   🌐 GlassFlow UI: http://localhost:%d\n", p)
-	}
-	if p, ok := actual["glassflow-api"]; ok {
-		fmt.Printf("   🔌 GlassFlow API: http://localhost:%d\n", p)
-	} else {
-		return nil, fmt.Errorf("failed to establish port forwarding for GlassFlow API - port may be in use")
-	}
-	if p, ok := actual["clickhouse"]; ok {
-		fmt.Printf("   🗄️  ClickHouse HTTP: http://localhost:%d\n", p)
+		actual[svc] = port
 	}
 
 	mapping := &PortMapping{
@@ -199,13 +198,33 @@ func SetupPortForwarding(kubeContext string) (*PortMapping, error) {
 		ClickHouseHTTP: actual["clickhouse"],
 	}
 
-	// Wait for port forwards to be ready with retry logic
+	fmt.Printf("🔗 Port forwarding established:\n")
+	if mapping.GlassFlowUI > 0 {
+		fmt.Printf("   🌐 GlassFlow UI: http://localhost:%d\n", mapping.GlassFlowUI)
+	}
+	if mapping.GlassFlowAPI > 0 {
+		fmt.Printf("   🔌 GlassFlow API: http://localhost:%d\n", mapping.GlassFlowAPI)
+	} else {
+		return nil, fmt.Errorf("failed to establish port forwarding for GlassFlow API - port may be in use")
+	}
+	if mapping.ClickHouseHTTP > 0 {
+		fmt.Printf("   🗄️  ClickHouse HTTP: http://localhost:%d\n", mapping.ClickHouseHTTP)
+	}
+	if mapping.GlassFlowUI == 0 {
+		fmt.Printf("   ⚠️  GlassFlow UI port-forward did not start (will retry in wait loop)\n")
+	}
+
+	// Wait for port forwards to be ready with retry logic (only for ports we started)
 	fmt.Println("⏳ Waiting for port forwarding to be ready...")
-	// Build port list with namespaces for retry loop
-	portsWithNS := []portForwardTarget{
-		{"GlassFlow API", mapping.GlassFlowAPI, "glassflow-api", "glassflow", 8081},
-		{"GlassFlow UI", mapping.GlassFlowUI, "glassflow-ui", "glassflow", 8080},
-		{"ClickHouse HTTP", mapping.ClickHouseHTTP, "clickhouse", "clickhouse", 8123},
+	var portsWithNS []portForwardTarget
+	if mapping.GlassFlowAPI > 0 {
+		portsWithNS = append(portsWithNS, portForwardTarget{"GlassFlow API", mapping.GlassFlowAPI, "glassflow-api", "glassflow", 8081})
+	}
+	if mapping.GlassFlowUI > 0 {
+		portsWithNS = append(portsWithNS, portForwardTarget{"GlassFlow UI", mapping.GlassFlowUI, "glassflow-ui", "glassflow", 8080})
+	}
+	if mapping.ClickHouseHTTP > 0 {
+		portsWithNS = append(portsWithNS, portForwardTarget{"ClickHouse HTTP", mapping.ClickHouseHTTP, "clickhouse", "clickhouse", 8123})
 	}
 	if err := waitForPortForwardsWithRetry(kubeContext, portsWithNS, 5*time.Minute); err != nil {
 		// Log warning but don't fail - services are accessible via DNS within cluster

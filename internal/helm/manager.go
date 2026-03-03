@@ -32,6 +32,7 @@ type Repository struct {
 
 type InstallOptions struct {
 	Chart           string
+	Version         string // chart version; when empty, Helm uses latest
 	ReleaseName     string
 	Namespace       string
 	Values          map[string]interface{} // used when ValuesFile is empty
@@ -156,6 +157,9 @@ func (h *Manager) InstallChart(ctx context.Context, opts *InstallOptions) (*Rele
 		"-f", valuesPath,
 		"--timeout", fmt.Sprintf("%ds", opts.Timeout),
 	)
+	if opts.Version != "" {
+		args = append(args, "--version", opts.Version)
+	}
 	if opts.CreateNamespace {
 		args = append(args, "--create-namespace")
 	}

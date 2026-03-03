@@ -8,7 +8,7 @@ charts:
   glassflow:
     repository: "https://glassflow.github.io/charts"
     chart: "glassflow/glassflow-etl"
-    version: "latest"
+    version: ""
   nats:
     repository: "https://nats-io.github.io/k8s/helm/charts"
     chart: "nats/nats"
@@ -16,7 +16,7 @@ charts:
   kafka:
     repository: "https://charts.bitnami.com/bitnami"
     chart: "bitnami/kafka"
-    version: "latest"
+    version: "32.4.3"
     image:
       registry: "docker.io"
       repository: "bitnamilegacy/kafka"
@@ -26,7 +26,7 @@ charts:
   clickhouse:
     repository: "https://charts.bitnami.com/bitnami"
     chart: "bitnami/clickhouse"
-    version: "latest"
+    version: "9.4.4"
     image:
       registry: "docker.io"
       repository: "bitnamilegacy/clickhouse"

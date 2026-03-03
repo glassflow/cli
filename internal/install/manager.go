@@ -37,9 +37,9 @@ const (
 	ClickHouseNamespace = "clickhouse"
 
 	// Wait timeouts for install phase (first run can take 10–20+ min if pods are scheduling)
-	WaitForServicesTimeout     = 25 * time.Minute
+	WaitForServicesTimeout        = 25 * time.Minute
 	WaitForKafkaClickHouseTimeout = 20 * time.Minute
-	WaitProgressInterval       = 30 * time.Second // print status and hints at this interval
+	WaitProgressInterval          = 30 * time.Second // print status and hints at this interval
 )
 
 type Manager struct {
@@ -197,6 +197,7 @@ func (i *Manager) installGlassFlow(ctx context.Context) error {
 
 	_, err = i.helmManager.InstallChart(ctx, &helm.InstallOptions{
 		Chart:           i.config.Charts.GlassFlow.Chart,
+		Version:         i.config.Charts.GlassFlow.Version, // empty = use latest
 		ReleaseName:     "glassflow",
 		Namespace:       i.config.Namespace,
 		ValuesFile:      valuesPath,
@@ -278,16 +279,28 @@ func (i *Manager) installKafka(ctx context.Context) error {
 		fmt.Printf("✅ Created Kafka secret with deterministic password\n")
 	}
 
-	// Kafka installation with 3 brokers for proper replication
-	// This allows default replication factor of 3 for __consumer_offsets topic
-	// For KRaft mode, ensure controller and broker share the same cluster ID
+	// Kafka installation: 1 controller for local Kind dev (reduces storage: 25Gi + 1Gi logs).
+	// KRaft supports single-node for dev; use 3 replicas in production.
+	// Single broker requires offsets.topic.replication.factor=1 so __consumer_offsets can be created (avoids COORDINATOR_NOT_AVAILABLE).
 	values := map[string]interface{}{
-		"replicaCount": 3, // 3 replicas for proper replication (matches default offsets topic replication)
+		"replicaCount": 1,
 		"controller": map[string]interface{}{
-			"replicaCount": 3, // 3 controllers for KRaft quorum
+			"replicaCount": 1,
+			"persistence": map[string]interface{}{
+				"enabled":      true,
+				"size":         "25Gi",
+				"storageClass": "",
+			},
+			"logPersistence": map[string]interface{}{
+				"enabled":      true,
+				"size":         "1Gi",
+				"storageClass": "",
+			},
 		},
-		"persistence": map[string]interface{}{
-			"enabled": false, // Use emptyDir for local dev
+		// Required for single-broker: allow __consumer_offsets and transaction log to be created with 1 replica (avoids COORDINATOR_NOT_AVAILABLE)
+		"overrideConfiguration": map[string]interface{}{
+			"offsets.topic.replication.factor":            "1",
+			"transaction.state.log.replication.factor":     "1",
 		},
 		"image": map[string]interface{}{
 			"registry":   i.config.Charts.Kafka.Image.Registry,
@@ -309,6 +322,7 @@ func (i *Manager) installKafka(ctx context.Context) error {
 
 	_, err = i.helmManager.InstallChart(ctx, &helm.InstallOptions{
 		Chart:           i.config.Charts.Kafka.Chart,
+		Version:         i.config.Charts.Kafka.Version,
 		ReleaseName:     "kafka",
 		Namespace:       KafkaNamespace,
 		Values:          values,
@@ -373,6 +387,7 @@ func (i *Manager) installClickHouse(ctx context.Context) error {
 
 	_, err := i.helmManager.InstallChart(ctx, &helm.InstallOptions{
 		Chart:           i.config.Charts.ClickHouse.Chart,
+		Version:         i.config.Charts.ClickHouse.Version,
 		ReleaseName:     "clickhouse",
 		Namespace:       ClickHouseNamespace,
 		Values:          values,
@@ -541,6 +556,60 @@ func (i *Manager) waitForKafkaAndClickHouse(ctx context.Context) error {
 	}
 }
 
+// waitForPipelineReady polls the pipeline health endpoint until overall_status is "Running" or "Failed".
+// Returns nil when running, or an error when failed or timeout.
+func waitForPipelineReady(ctx context.Context, apiClient *demo.APIClient, pipelineID string) error {
+	const (
+		pollInterval = 3 * time.Second
+		timeout      = 5 * time.Minute
+	)
+	deadline := time.Now().Add(timeout)
+	startTime := time.Now()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	fmt.Print("\n⏳ Waiting for pipeline to reach running state")
+	pollCount := 0
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for pipeline to become ready after %v", timeout)
+		}
+		health, err := apiClient.GetPipelineHealth(ctx, pipelineID)
+		if err != nil {
+			if demo.IsConnectionError(err) {
+				// Transient; keep polling
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-ticker.C:
+					continue
+				}
+			}
+			return fmt.Errorf("failed to get pipeline health: %w", err)
+		}
+		status := strings.TrimSpace(strings.ToLower(health.OverallStatus))
+		switch status {
+		case "running":
+			fmt.Printf("\n✅ Pipeline is running (took %s)\n", time.Since(startTime).Round(time.Second))
+			return nil
+		case "failed":
+			return fmt.Errorf("pipeline entered failed state (pipeline_id=%s). Check GlassFlow UI or logs for details", pipelineID)
+		default:
+			// Pending, starting, etc. - keep polling
+			pollCount++
+			if pollCount%10 == 0 {
+				fmt.Print(".")
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			// continue
+		}
+	}
+}
+
 // checkPodsReady checks if all pods matching the selector in the given namespace are ready
 func (i *Manager) checkPodsReady(ctx context.Context, client kubernetes.Interface, namespace, selector string) bool {
 	pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
@@ -590,6 +659,8 @@ func (i *Manager) setupDemo(ctx context.Context, portMapping *k8s.PortMapping) e
 	if err != nil {
 		return fmt.Errorf("failed to load pipeline request: %w", err)
 	}
+	// Pipeline ID from request JSON (e.g. demo-pipeline-qasxjh) is used for health polling
+	pipelineIDFromRequest, _ := demo.GetPipelineIDFromRequest(pipelineJSONPath)
 
 	clickhouseSQLPath, err := demo.LoadClickHouseSQLPath()
 	if err != nil {
@@ -650,10 +721,20 @@ func (i *Manager) setupDemo(ctx context.Context, portMapping *k8s.PortMapping) e
 		}
 
 		// Try to create pipeline
-		err := apiClient.CreatePipeline(ctx, pipelineJSONPath, DemoKafkaUsername, kafkaPassword, DemoClickHouseUsername, DemoClickHousePassword)
+		pipelineID, err := apiClient.CreatePipeline(ctx, pipelineJSONPath, DemoKafkaUsername, kafkaPassword, DemoClickHouseUsername, DemoClickHousePassword)
 		if err == nil {
 			// Success
 			fmt.Printf("\n✅ Pipeline created successfully (after %d attempts, %v elapsed)\n", attempt, elapsed.Round(time.Second))
+			// Use pipeline ID from API response, or from request JSON (e.g. demo-pipeline-qasxjh) for health polling
+			healthPollID := pipelineID
+			if healthPollID == "" {
+				healthPollID = pipelineIDFromRequest
+			}
+			if healthPollID != "" {
+				if waitErr := waitForPipelineReady(ctx, apiClient, healthPollID); waitErr != nil {
+					return waitErr
+				}
+			}
 			break
 		}
 

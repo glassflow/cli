@@ -2,6 +2,7 @@ package demo
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,9 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/glassflow/glassflow-cli/internal/github"
 )
+
+//go:embed clickhouse_table.sql
+var defaultClickHouseSQL []byte
 
 // ClickHouseClient handles communication with ClickHouse HTTP API
 type ClickHouseClient struct {
@@ -111,10 +113,9 @@ func (c *ClickHouseClient) CreateTable(ctx context.Context, sqlFilePath string) 
 	return nil
 }
 
-// LoadClickHouseSQLPath returns the path to the ClickHouse SQL file
-// If not found locally, it downloads from GitHub
+// LoadClickHouseSQLPath returns the path to the ClickHouse SQL file.
+// It tries local paths first; if not found, uses the embedded default (no network download).
 func LoadClickHouseSQLPath() (string, error) {
-	// Try to find demo/clickhouse_table.sql relative to current working directory
 	paths := []string{
 		"demo/clickhouse_table.sql",
 		"./demo/clickhouse_table.sql",
@@ -130,7 +131,20 @@ func LoadClickHouseSQLPath() (string, error) {
 		}
 	}
 
-	// If not found locally, download from GitHub
-	fmt.Println("📥 Downloading clickhouse_table.sql from GitHub...")
-	return github.DownloadClickHouseSQL(version)
+	// Use embedded default (no download)
+	tmp, err := os.CreateTemp("", "glassflow-clickhouse-table-*.sql")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file for ClickHouse SQL: %w", err)
+	}
+	path := tmp.Name()
+	if _, err := tmp.Write(defaultClickHouseSQL); err != nil {
+		tmp.Close()
+		os.Remove(path)
+		return "", fmt.Errorf("failed to write ClickHouse SQL: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(path)
+		return "", fmt.Errorf("failed to close temp file: %w", err)
+	}
+	return path, nil
 }

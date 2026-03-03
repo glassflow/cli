@@ -60,19 +60,66 @@ func NewAPIClient(baseURL string) *APIClient {
 	}
 }
 
-// CreatePipeline reads the pipeline request JSON and creates a pipeline via API
-// It injects Kafka SASL authentication credentials and ClickHouse credentials before sending
-func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, kafkaUsername, kafkaPassword, clickhouseUsername, clickhousePassword string) error {
+// PipelineHealthResponse is the response from GET /api/v1/pipeline/{id}/health
+type PipelineHealthResponse struct {
+	CreatedAt      string `json:"created_at"`
+	OverallStatus  string `json:"overall_status"`
+	PipelineID     string `json:"pipeline_id"`
+	PipelineName   string `json:"pipeline_name"`
+	UpdatedAt      string `json:"updated_at"`
+}
+
+// GetPipelineHealth fetches the health status for a pipeline (GET /api/v1/pipeline/{id}/health).
+func (c *APIClient) GetPipelineHealth(ctx context.Context, pipelineID string) (*PipelineHealthResponse, error) {
+	if pipelineID == "" {
+		return nil, fmt.Errorf("pipeline ID is required")
+	}
+	url := fmt.Sprintf("%s/api/v1/pipeline/%s/health", c.baseURL, pipelineID)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "connection refused") ||
+			strings.Contains(errStr, "dial tcp") ||
+			strings.Contains(errStr, "no such host") ||
+			strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "connect: connection refused") {
+			return nil, &ConnectionError{Err: err, URL: url}
+		}
+		return nil, fmt.Errorf("failed to get pipeline health: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("pipeline health request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+	var health PipelineHealthResponse
+	if err := json.Unmarshal(body, &health); err != nil {
+		return nil, fmt.Errorf("failed to parse pipeline health response: %w", err)
+	}
+	return &health, nil
+}
+
+// CreatePipeline reads the pipeline request JSON and creates a pipeline via API.
+// It injects Kafka SASL authentication credentials and ClickHouse credentials before sending.
+// Returns the pipeline ID from the response when successful, or empty string when pipeline already exists (403).
+func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, kafkaUsername, kafkaPassword, clickhouseUsername, clickhousePassword string) (string, error) {
 	// Read the pipeline request JSON file
 	data, err := os.ReadFile(requestJSONPath)
 	if err != nil {
-		return fmt.Errorf("failed to read pipeline request file: %w", err)
+		return "", fmt.Errorf("failed to read pipeline request file: %w", err)
 	}
 
 	// Parse JSON to a map so we can modify it
 	var requestBody map[string]interface{}
 	if err := json.Unmarshal(data, &requestBody); err != nil {
-		return fmt.Errorf("failed to parse pipeline request JSON: %w", err)
+		return "", fmt.Errorf("failed to parse pipeline request JSON: %w", err)
 	}
 
 	// Kafka is configured with SASL authentication
@@ -99,7 +146,7 @@ func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, 
 	// Re-marshal the updated JSON
 	data, err = json.Marshal(requestBody)
 	if err != nil {
-		return fmt.Errorf("failed to marshal updated pipeline request: %w", err)
+		return "", fmt.Errorf("failed to marshal updated pipeline request: %w", err)
 	}
 
 	// Create HTTP request
@@ -125,7 +172,7 @@ func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, 
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -142,16 +189,16 @@ func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, 
 			strings.Contains(errStr, "connect: connection refused")
 
 		if isConnectionError {
-			return &ConnectionError{Err: err, URL: url}
+			return "", &ConnectionError{Err: err, URL: url}
 		}
-		return fmt.Errorf("failed to send request to %s: %w", url, err)
+		return "", fmt.Errorf("failed to send request to %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
 	// Check status code
@@ -163,19 +210,35 @@ func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, 
 			if resp.StatusCode == 403 {
 				if msg, ok := errorResp["message"].(string); ok && (contains(msg, "already exists") || contains(msg, "duplicate")) {
 					fmt.Printf("ℹ️  Pipeline already exists, continuing with producer deployment...\n")
-					return nil // Treat as success, pipeline exists
+					// Try to get pipeline_id from error response for health polling
+					if id, _ := errorResp["pipeline_id"].(string); id != "" {
+						return id, nil
+					}
+					return "", nil
 				}
 			}
 			fmt.Printf("❌ Pipeline creation failed (status %d): %v\n", resp.StatusCode, errorResp)
-			return fmt.Errorf("pipeline creation failed with status %d", resp.StatusCode)
+			return "", fmt.Errorf("pipeline creation failed with status %d", resp.StatusCode)
 		}
 		// If not JSON, print raw response
 		fmt.Printf("❌ Pipeline creation failed (status %d): %s\n", resp.StatusCode, string(body))
-		return fmt.Errorf("pipeline creation failed with status %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("pipeline creation failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Parse response for pipeline_id (support "pipeline_id" or "id")
+	var createResp map[string]interface{}
+	if err := json.Unmarshal(body, &createResp); err == nil {
+		if id, ok := createResp["pipeline_id"].(string); ok && id != "" {
+			fmt.Println("✅ Pipeline created successfully")
+			return id, nil
+		}
+		if id, ok := createResp["id"].(string); ok && id != "" {
+			fmt.Println("✅ Pipeline created successfully")
+			return id, nil
+		}
+	}
 	fmt.Println("✅ Pipeline created successfully")
-	return nil
+	return "", nil
 }
 
 // LoadPipelineRequestPath returns the path to the demo pipeline request JSON.
@@ -213,6 +276,23 @@ func LoadPipelineRequestPath() (string, error) {
 		return "", fmt.Errorf("failed to close pipeline request file: %w", err)
 	}
 	return path, nil
+}
+
+// GetPipelineIDFromRequest reads pipeline_id from the pipeline request JSON file.
+// The demo uses a fixed pipeline_id (e.g. "demo-pipeline-qasxjh") for health polling.
+func GetPipelineIDFromRequest(requestJSONPath string) (string, error) {
+	data, err := os.ReadFile(requestJSONPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read pipeline request file: %w", err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return "", fmt.Errorf("failed to parse pipeline request JSON: %w", err)
+	}
+	if id, ok := m["pipeline_id"].(string); ok && id != "" {
+		return id, nil
+	}
+	return "", nil
 }
 
 func contains(s, substr string) bool {

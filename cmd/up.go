@@ -161,13 +161,18 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("✅ GlassFlow environment is ready!")
 
-	// If --demo, also run port-forward and demo setup
+	// Start port forwarding (runs in background and persists after CLI exits)
+	fmt.Println("🔗 Setting up port forwarding...")
+	portMapping, err := k8s.SetupPortForwarding(cfg.Context)
+	if err != nil {
+		return fmt.Errorf("failed to setup port forwarding: %w", err)
+	}
+	if portMapping != nil {
+		fmt.Println("💡 Port forwarding is running in the background. Use 'glassflow down' to stop it.")
+	}
+
+	// If --demo, also run demo setup (table + pipeline + producer)
 	if upOptions.Demo {
-		fmt.Println("🔗 Setting up port forwarding...")
-		portMapping, err := k8s.SetupPortForwarding(cfg.Context)
-		if err != nil {
-			return fmt.Errorf("failed to setup port forwarding: %w", err)
-		}
 		if err := installManager.SetupDemo(ctx, portMapping); err != nil {
 			return fmt.Errorf("failed to setup demo: %w", err)
 		}
