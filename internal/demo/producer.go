@@ -123,7 +123,7 @@ def produce_messages(producer, topic, interval_seconds):
         print("✅ Producer closed")
 
 def main():
-    broker = os.getenv("KAFKA_BROKER", "kafka.glassflow.svc.cluster.local:9092")
+    broker = os.getenv("KAFKA_BROKER", "kafka.kafka.svc.cluster.local:9092")
     topic = os.getenv("KAFKA_TOPIC", "demo-events")
     username = os.getenv("KAFKA_USERNAME", "user1")
     password = os.getenv("KAFKA_PASSWORD", "")

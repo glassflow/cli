@@ -3,6 +3,7 @@ package demo
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,9 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/glassflow/glassflow-cli/internal/github"
 )
+
+//go:embed demo_pipeline_request.json
+var defaultPipelineRequestJSON []byte
 
 // version is set by SetVersion and used for downloading files from GitHub
 var version string = "dev"
@@ -176,11 +178,10 @@ func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, 
 	return nil
 }
 
-// LoadPipelineRequestPath returns the path to the demo pipeline request JSON
-// If not found locally, it downloads from GitHub
+// LoadPipelineRequestPath returns the path to the demo pipeline request JSON.
+// It tries local paths first; if not found, uses the embedded default (no network download).
 func LoadPipelineRequestPath() (string, error) {
 	// Try to find demo/demo_pipeline_request.json relative to current working directory
-	// or in common locations
 	paths := []string{
 		"demo/demo_pipeline_request.json",
 		"./demo/demo_pipeline_request.json",
@@ -196,9 +197,22 @@ func LoadPipelineRequestPath() (string, error) {
 		}
 	}
 
-	// If not found locally, download from GitHub
-	fmt.Println("📥 Downloading demo_pipeline_request.json from GitHub...")
-	return github.DownloadPipelineRequest(version)
+	// Use embedded default (no download)
+	tmp, err := os.CreateTemp("", "glassflow-demo-pipeline-*.json")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file for pipeline request: %w", err)
+	}
+	path := tmp.Name()
+	if _, err := tmp.Write(defaultPipelineRequestJSON); err != nil {
+		tmp.Close()
+		os.Remove(path)
+		return "", fmt.Errorf("failed to write pipeline request: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(path)
+		return "", fmt.Errorf("failed to close pipeline request file: %w", err)
+	}
+	return path, nil
 }
 
 func contains(s, substr string) bool {

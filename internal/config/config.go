@@ -1,13 +1,17 @@
 package config
 
 import (
+	"bytes"
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/glassflow/glassflow-cli/internal/github"
 	"github.com/spf13/viper"
 )
+
+//go:embed default_config.yaml
+var defaultConfigYAML []byte
 
 type Config struct {
 	Kubeconfig string `mapstructure:"kubeconfig"`
@@ -49,20 +53,12 @@ func Load(configPath, version string) (*Config, error) {
 		viper.AddConfigPath(".")
 	}
 
-	// Try to read config file, if it fails, download from GitHub
+	// Try to read config file; if none found and no explicit path, use embedded default
 	if err := viper.ReadInConfig(); err != nil {
-		// If no explicit path and file not found, download from GitHub
 		if configPath == "" {
-			fmt.Println("📥 Downloading config.yaml from GitHub...")
-			downloadedPath, err := github.DownloadConfig(version)
-			if err != nil {
-				return nil, fmt.Errorf("failed to download config from GitHub: %w", err)
-			}
-			// Clean up temp file after reading
-			defer os.Remove(downloadedPath)
-			viper.SetConfigFile(downloadedPath)
-			if err := viper.ReadInConfig(); err != nil {
-				return nil, fmt.Errorf("failed to read downloaded config: %w", err)
+			// Use embedded default config (no network download)
+			if err := viper.ReadConfig(bytes.NewReader(defaultConfigYAML)); err != nil {
+				return nil, fmt.Errorf("failed to read embedded config: %w", err)
 			}
 		} else {
 			return nil, fmt.Errorf("failed to read config file: %w", err)

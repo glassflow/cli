@@ -128,18 +128,20 @@ func SetupPortForwarding(kubeContext string) (*PortMapping, error) {
 		}
 		fmt.Printf("   kubectl%s -n glassflow port-forward service/glassflow-api 30180:8081\n", ctxFlag)
 		fmt.Printf("   kubectl%s -n glassflow port-forward service/glassflow-ui 30080:8080\n", ctxFlag)
-		fmt.Printf("   kubectl%s -n glassflow port-forward service/clickhouse 30090:8123\n", ctxFlag)
+		fmt.Printf("   kubectl%s -n clickhouse port-forward service/clickhouse 30090:8123\n", ctxFlag)
 		return nil, nil
 	}
 
+	// namespace: GlassFlow services in glassflow, ClickHouse in clickhouse
 	services := map[string]struct {
 		preferredPort int
 		targetPort    int
 		name          string
+		namespace     string
 	}{
-		"glassflow-api": {30180, 8081, "GlassFlow API"}, // API first (higher priority)
-		"glassflow-ui":  {30080, 8080, "GlassFlow UI"},
-		"clickhouse":    {30090, 8123, "ClickHouse HTTP"},
+		"glassflow-api": {30180, 8081, "GlassFlow API", "glassflow"},
+		"glassflow-ui":  {30080, 8080, "GlassFlow UI", "glassflow"},
+		"clickhouse":    {30090, 8123, "ClickHouse HTTP", "clickhouse"},
 	}
 
 	actual := make(map[string]int)
@@ -153,7 +155,7 @@ func SetupPortForwarding(kubeContext string) (*PortMapping, error) {
 		}
 		actual[svc] = port
 		mapping := fmt.Sprintf("%d:%d", port, cfg.targetPort)
-		args := []string{"port-forward", "-n", "glassflow", "service/" + svc, mapping}
+		args := []string{"port-forward", "-n", cfg.namespace, "service/" + svc, mapping}
 		if kubeContext != "" {
 			args = append([]string{"--context", kubeContext}, args...)
 		}
@@ -199,8 +201,13 @@ func SetupPortForwarding(kubeContext string) (*PortMapping, error) {
 
 	// Wait for port forwards to be ready with retry logic
 	fmt.Println("⏳ Waiting for port forwarding to be ready...")
-	// Increase timeout to 5 minutes and make failures non-fatal
-	if err := waitForPortForwardsWithRetry(kubeContext, services, actual, mapping, 5*time.Minute); err != nil {
+	// Build port list with namespaces for retry loop
+	portsWithNS := []portForwardTarget{
+		{"GlassFlow API", mapping.GlassFlowAPI, "glassflow-api", "glassflow", 8081},
+		{"GlassFlow UI", mapping.GlassFlowUI, "glassflow-ui", "glassflow", 8080},
+		{"ClickHouse HTTP", mapping.ClickHouseHTTP, "clickhouse", "clickhouse", 8123},
+	}
+	if err := waitForPortForwardsWithRetry(kubeContext, portsWithNS, 5*time.Minute); err != nil {
 		// Log warning but don't fail - services are accessible via DNS within cluster
 		fmt.Printf("⚠️  Warning: Port forwarding not fully ready: %v\n", err)
 		fmt.Println("💡 Demo setup will continue - services are accessible via DNS within the cluster")
@@ -213,23 +220,18 @@ func SetupPortForwarding(kubeContext string) (*PortMapping, error) {
 	return mapping, nil
 }
 
+// portForwardTarget holds namespace and service for retry logic
+type portForwardTarget struct {
+	name       string
+	port       int
+	service    string
+	namespace  string
+	targetPort int
+}
+
 // waitForPortForwardsWithRetry waits for port forwards to be ready, retrying failed ones
-func waitForPortForwardsWithRetry(kubeContext string, services map[string]struct {
-	preferredPort int
-	targetPort    int
-	name          string
-}, actual map[string]int, mapping *PortMapping, timeout time.Duration) error {
+func waitForPortForwardsWithRetry(kubeContext string, ports []portForwardTarget, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	ports := []struct {
-		name       string
-		port       int
-		service    string
-		targetPort int
-	}{
-		{"GlassFlow API", mapping.GlassFlowAPI, "glassflow-api", 8081},
-		{"GlassFlow UI", mapping.GlassFlowUI, "glassflow-ui", 8080},
-		{"ClickHouse HTTP", mapping.ClickHouseHTTP, "clickhouse", 8123},
-	}
 
 	st, _ := loadPF()
 	lastRetryTime := time.Now()
@@ -261,8 +263,8 @@ func waitForPortForwardsWithRetry(kubeContext string, services map[string]struct
 			lastPodCheckTime = time.Now()
 			for _, p := range ports {
 				if !isPortListening(p.port) {
-					// Check if pods for this service are ready
-					if !areServicePodsReady(kubeContext, p.service) {
+					// Check if pods for this service are ready (in its namespace)
+					if !areServicePodsReady(kubeContext, p.namespace, p.service) {
 						podsReady = false
 						break
 					}
@@ -305,9 +307,9 @@ func waitForPortForwardsWithRetry(kubeContext string, services map[string]struct
 					}
 					st.Entries = newEntries
 
-					// Retry starting port forward
+					// Retry starting port forward (use service's namespace)
 					mappingStr := fmt.Sprintf("%d:%d", p.port, p.targetPort)
-					args := []string{"port-forward", "-n", "glassflow", "service/" + p.service, mappingStr}
+					args := []string{"port-forward", "-n", p.namespace, "service/" + p.service, mappingStr}
 					if kubeContext != "" {
 						args = append([]string{"--context", kubeContext}, args...)
 					}
@@ -336,8 +338,8 @@ func waitForPortForwardsWithRetry(kubeContext string, services map[string]struct
 }
 
 // areServicePodsReady checks if pods for a service are ready by checking service endpoints
-func areServicePodsReady(kubeContext string, serviceName string) bool {
-	args := []string{"get", "endpoints", "-n", "glassflow", serviceName, "-o", "jsonpath={.subsets[*].addresses[*].ip}"}
+func areServicePodsReady(kubeContext string, namespace string, serviceName string) bool {
+	args := []string{"get", "endpoints", "-n", namespace, serviceName, "-o", "jsonpath={.subsets[*].addresses[*].ip}"}
 	if kubeContext != "" {
 		args = append([]string{"--context", kubeContext}, args...)
 	}
@@ -363,7 +365,7 @@ func isPortListening(port int) bool {
 
 // RestartPortForwardForService restarts port forwarding for a specific service
 // This is useful when a pod restarts and the port forward connection is lost
-func RestartPortForwardForService(kubeContext string, serviceName string, port int, targetPort int) error {
+func RestartPortForwardForService(kubeContext string, namespace string, serviceName string, port int, targetPort int) error {
 	st, err := loadPF()
 	if err != nil {
 		return fmt.Errorf("failed to load port-forward state: %w", err)
@@ -385,7 +387,7 @@ func RestartPortForwardForService(kubeContext string, serviceName string, port i
 
 	// Start new port forward
 	mappingStr := fmt.Sprintf("%d:%d", port, targetPort)
-	args := []string{"port-forward", "-n", "glassflow", "service/" + serviceName, mappingStr}
+	args := []string{"port-forward", "-n", namespace, "service/" + serviceName, mappingStr}
 	if kubeContext != "" {
 		args = append([]string{"--context", kubeContext}, args...)
 	}

@@ -1,0 +1,71 @@
+# Reduced resource values for local Kind cluster MVP
+# Based on: https://raw.githubusercontent.com/glassflow/charts/refs/heads/main/charts/glassflow-etl/values.yaml
+
+global:
+  usageStats:
+    enabled: false
+  observability:
+    metrics:
+      enabled: false
+    logs:
+      enabled: false
+  stream:
+      maxAge: 24h
+      maxBytes: 0
+
+nats:  
+  enabled: true
+  config:
+    cluster:
+      enabled: true
+      port: 6222
+      replicas: 3
+    jetstream:
+      enabled: true
+      memoryStore:
+        enabled: false
+        maxSize: 1Gi
+      fileStore:
+        enabled: true
+        dir: /data
+        pvc:
+          enabled: true
+          size: 20Gi
+          storageClassName: ""
+  container:
+    merge:
+      resources:
+        requests:
+          memory: "1Gi"
+          cpu: "500m"
+        limits:
+          memory: "1Gi"
+          cpu: "500m"
+
+
+glassflow-operator:
+  glassflowComponents:
+    ingestor:
+      resources:
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    join:
+      resources:
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    sink:
+      resources:
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi

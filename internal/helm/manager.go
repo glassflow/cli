@@ -3,22 +3,19 @@ package helm
 import (
 	"context"
 	"fmt"
-	"time"
+	"os"
+	"os/exec"
+	"path/filepath"
 
-	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/chart/loader"
-	"helm.sh/helm/v3/pkg/cli"
-	"helm.sh/helm/v3/pkg/getter"
-	"helm.sh/helm/v3/pkg/kube"
-	"helm.sh/helm/v3/pkg/release"
-	"helm.sh/helm/v3/pkg/repo"
-	"k8s.io/client-go/kubernetes"
+	"gopkg.in/yaml.v3"
 )
 
 type Manager struct {
-	client   kubernetes.Interface
-	settings *cli.EnvSettings
-	config   *Config
+	repoConfigPath string
+	repoCachePath   string
+	kubeconfig      string
+	kubeContext     string
+	config          *Config
 }
 
 type Config struct {
@@ -37,7 +34,8 @@ type InstallOptions struct {
 	Chart           string
 	ReleaseName     string
 	Namespace       string
-	Values          map[string]interface{}
+	Values          map[string]interface{} // used when ValuesFile is empty
+	ValuesFile      string                // when set, passed as -f to helm (overrides Values)
 	CreateNamespace bool
 	Wait            bool
 	Timeout         int
@@ -58,133 +56,152 @@ type Release struct {
 	Chart     string
 }
 
-func NewManager(client kubernetes.Interface, config *Config) *Manager {
-	settings := cli.New()
-	settings.KubeConfig = config.Kubeconfig
-	settings.KubeContext = config.Context
+func helmConfigDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".glassflow", "helm"), nil
+}
+
+func NewManager(_ interface{}, config *Config) *Manager {
+	repoConfigPath := ""
+	repoCachePath := ""
+	if base, err := helmConfigDir(); err == nil {
+		repoConfigPath = filepath.Join(base, "repositories.yaml")
+		repoCachePath = filepath.Join(base, "repository")
+	}
 
 	return &Manager{
-		client:   client,
-		settings: settings,
-		config:   config,
+		repoConfigPath: repoConfigPath,
+		repoCachePath:  repoCachePath,
+		kubeconfig:     config.Kubeconfig,
+		kubeContext:    config.Context,
+		config:         config,
 	}
 }
 
+func (h *Manager) helmEnv() []string {
+	env := os.Environ()
+	if h.kubeconfig != "" {
+		env = append(env, "KUBECONFIG="+h.kubeconfig)
+	}
+	if h.kubeContext != "" {
+		env = append(env, "HELM_KUBECONTEXT="+h.kubeContext)
+	}
+	return env
+}
+
+func (h *Manager) helmBaseArgs() []string {
+	args := []string{}
+	if h.repoConfigPath != "" {
+		args = append(args, "--repository-config", h.repoConfigPath, "--repository-cache", h.repoCachePath)
+	}
+	return args
+}
+
 func (h *Manager) AddRepository(ctx context.Context, repoConfig *Repository) error {
-	// Print the Helm command being executed
+	if h.repoConfigPath == "" {
+		return fmt.Errorf("helm config directory not available")
+	}
+	if err := os.MkdirAll(filepath.Dir(h.repoConfigPath), 0o755); err != nil {
+		return fmt.Errorf("failed to create repository config directory: %w", err)
+	}
+	if err := os.MkdirAll(h.repoCachePath, 0o755); err != nil {
+		return fmt.Errorf("failed to create repository cache directory: %w", err)
+	}
+
 	fmt.Printf("🔧 Running: helm repo add %s %s\n", repoConfig.Name, repoConfig.URL)
 
-	chartRepo, err := repo.NewChartRepository(&repo.Entry{
-		Name: repoConfig.Name,
-		URL:  repoConfig.URL,
-	}, getter.All(h.settings))
-	if err != nil {
-		return fmt.Errorf("failed to create chart repository: %w", err)
-	}
+	args := append(h.helmBaseArgs(), "repo", "add", repoConfig.Name, repoConfig.URL)
+	cmd := exec.CommandContext(ctx, "helm", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = h.helmEnv()
 
-	_, err = chartRepo.DownloadIndexFile()
-	if err != nil {
-		return fmt.Errorf("failed to download index file: %w", err)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("helm repo add failed: %w", err)
 	}
-
-	// TODO: Add repository to Helm's repository list
 	return nil
 }
 
 func (h *Manager) InstallChart(ctx context.Context, opts *InstallOptions) (*Release, error) {
-	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(h.settings.RESTClientGetter(), opts.Namespace, "secret", func(format string, v ...interface{}) {
-		// TODO: Implement logging
-	}); err != nil {
-		return nil, fmt.Errorf("failed to initialize action config: %w", err)
-	}
-
-	// Fix for namespace issue: When actionConfig.Init is called it sets up the driver with the default namespace.
-	// We need to change the namespace to honor the release namespace.
-	// https://github.com/helm/helm/issues/9171
-	if kubeClient, ok := actionConfig.KubeClient.(*kube.Client); ok {
-		kubeClient.Namespace = opts.Namespace
-	}
-
-	// Check if release already exists
-	getClient := action.NewGet(actionConfig)
-	_, err := getClient.Run(opts.ReleaseName)
-	releaseExists := err == nil
-
-	// Locate chart (needed for both install and upgrade)
-	installAction := action.NewInstall(actionConfig)
-	chartPath, err := installAction.LocateChart(opts.Chart, h.settings)
-	if err != nil {
-		return nil, fmt.Errorf("failed to locate chart: %w", err)
-	}
-
-	chart, err := loader.Load(chartPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load chart: %w", err)
-	}
-
-	var release *release.Release
-	if releaseExists {
-		// Upgrade existing release
-		upgradeAction := action.NewUpgrade(actionConfig)
-		upgradeAction.Namespace = opts.Namespace
-		upgradeAction.Wait = opts.Wait
-		upgradeAction.Timeout = time.Duration(opts.Timeout) * time.Second
-
-		fmt.Printf("🔧 Running: helm upgrade %s %s --namespace %s --wait --timeout %ds\n",
-			opts.ReleaseName, opts.Chart, opts.Namespace, opts.Timeout)
-
-		release, err = upgradeAction.RunWithContext(ctx, opts.ReleaseName, chart, opts.Values)
-		if err != nil {
-			return nil, fmt.Errorf("failed to upgrade chart: %w", err)
-		}
+	var valuesPath string
+	if opts.ValuesFile != "" {
+		valuesPath = opts.ValuesFile
 	} else {
-		// Install new release
-		installAction := action.NewInstall(actionConfig)
-		installAction.ReleaseName = opts.ReleaseName
-		installAction.Namespace = opts.Namespace
-		installAction.CreateNamespace = opts.CreateNamespace
-		installAction.Wait = opts.Wait
-		installAction.Timeout = time.Duration(opts.Timeout) * time.Second
-
-		fmt.Printf("🔧 Running: helm install %s %s --namespace %s --create-namespace --wait --timeout %ds\n",
-			opts.ReleaseName, opts.Chart, opts.Namespace, opts.Timeout)
-
-		release, err = installAction.RunWithContext(ctx, chart, opts.Values)
+		valuesYAML, err := yaml.Marshal(opts.Values)
 		if err != nil {
-			return nil, fmt.Errorf("failed to install chart: %w", err)
+			return nil, fmt.Errorf("failed to marshal values: %w", err)
 		}
+		valuesFile, err := os.CreateTemp("", "glassflow-helm-values-*.yaml")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create values file: %w", err)
+		}
+		valuesPath = valuesFile.Name()
+		defer os.Remove(valuesPath)
+		if _, err := valuesFile.Write(valuesYAML); err != nil {
+			valuesFile.Close()
+			return nil, fmt.Errorf("failed to write values file: %w", err)
+		}
+		if err := valuesFile.Close(); err != nil {
+			return nil, fmt.Errorf("failed to close values file: %w", err)
+		}
+	}
+
+	// helm upgrade --install treats install and upgrade the same; --create-namespace creates namespace if needed
+	args := h.helmBaseArgs()
+	args = append(args, "upgrade", "--install", opts.ReleaseName, opts.Chart,
+		"--namespace", opts.Namespace,
+		"-f", valuesPath,
+		"--timeout", fmt.Sprintf("%ds", opts.Timeout),
+	)
+	if opts.CreateNamespace {
+		args = append(args, "--create-namespace")
+	}
+	if opts.Wait {
+		args = append(args, "--wait")
+	}
+
+	fmt.Printf("🔧 Running: helm upgrade --install %s %s --namespace %s -f %s --timeout %ds\n",
+		opts.ReleaseName, opts.Chart, opts.Namespace, valuesPath, opts.Timeout)
+
+	cmd := exec.CommandContext(ctx, "helm", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = h.helmEnv()
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("helm upgrade --install failed: %w", err)
 	}
 
 	return &Release{
-		Name:      release.Name,
-		Namespace: release.Namespace,
-		Status:    release.Info.Status.String(),
-		Version:   fmt.Sprintf("%d", release.Version),
-		Chart:     release.Chart.Metadata.Name,
+		Name:      opts.ReleaseName,
+		Namespace: opts.Namespace,
+		Chart:     opts.Chart,
 	}, nil
 }
 
 func (h *Manager) UninstallChart(ctx context.Context, opts *UninstallOptions) error {
-	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(h.settings.RESTClientGetter(), opts.Namespace, "secret", func(format string, v ...interface{}) {
-		// TODO: Implement logging
-	}); err != nil {
-		return fmt.Errorf("failed to initialize action config: %w", err)
+	args := h.helmBaseArgs()
+	args = append(args, "uninstall", opts.ReleaseName,
+		"--namespace", opts.Namespace,
+		"--timeout", fmt.Sprintf("%ds", opts.Timeout),
+	)
+	if opts.Wait {
+		args = append(args, "--wait")
 	}
 
-	uninstallAction := action.NewUninstall(actionConfig)
-	uninstallAction.Wait = opts.Wait
-	uninstallAction.Timeout = time.Duration(opts.Timeout) * time.Second
-
-	// Print the Helm command being executed
-	fmt.Printf("🔧 Running: helm uninstall %s --namespace %s --wait --timeout %ds\n",
+	fmt.Printf("🔧 Running: helm uninstall %s --namespace %s --timeout %ds\n",
 		opts.ReleaseName, opts.Namespace, opts.Timeout)
 
-	_, err := uninstallAction.Run(opts.ReleaseName)
-	if err != nil {
-		return fmt.Errorf("failed to uninstall chart: %w", err)
-	}
+	cmd := exec.CommandContext(ctx, "helm", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = h.helmEnv()
 
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("helm uninstall failed: %w", err)
+	}
 	return nil
 }
