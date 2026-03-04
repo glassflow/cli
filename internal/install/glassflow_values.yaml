@@ -3,7 +3,7 @@
 
 global:
   usageStats:
-    enabled: false
+    enabled: true
   observability:
     metrics:
       enabled: false
@@ -18,7 +18,7 @@ global:
       name: glassflow-pipelines
       create: true
 
-nats:  
+nats:
   enabled: true
   config:
     cluster:

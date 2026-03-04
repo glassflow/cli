@@ -11,6 +11,8 @@ import (
 	"github.com/glassflow/glassflow-cli/internal/helm"
 	"github.com/glassflow/glassflow-cli/internal/install"
 	"github.com/glassflow/glassflow-cli/internal/k8s"
+	"github.com/glassflow/glassflow-cli/internal/tracking"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -43,7 +45,17 @@ func checkDockerRuntime() error {
 	return nil
 }
 
-func runUp(cmd *cobra.Command, args []string) error {
+func runUp(cmd *cobra.Command, args []string) (err error) {
+	installationID := uuid.New().String()
+	startTime := time.Now()
+	defer func() {
+		if err != nil {
+			tracking.TrackUpFailed(installationID, version, upOptions.Demo, err)
+		} else {
+			tracking.TrackUpCompleted(installationID, version, upOptions.Demo, time.Since(startTime))
+		}
+	}()
+
 	if verbose {
 		fmt.Printf("Starting GlassFlow environment with demo=%v, namespace=%s\n", upOptions.Demo, "glassflow")
 	}
@@ -52,16 +64,18 @@ func runUp(cmd *cobra.Command, args []string) error {
 	demo.SetVersion(version)
 
 	fmt.Println("🚀 Starting GlassFlow local development environment...")
+	tracking.TrackUpStarted(installationID, version, upOptions.Demo)
 
 	// Preflight: verify a Docker-compatible runtime is available
-	if err := checkDockerRuntime(); err != nil {
+	if err = checkDockerRuntime(); err != nil {
 		return err
 	}
 
 	// Load configuration
 	cfg, err := config.Load(configPath, version)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		err = fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 
 	// Initialize managers
@@ -73,28 +87,31 @@ func runUp(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	status, err := k8sManager.GetClusterStatus(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to check cluster status: %w", err)
+		err = fmt.Errorf("failed to check cluster status: %w", err)
+		return err
 	}
 
 	// Create Kind cluster if it doesn't exist
 	if status.Status != "Running" {
 		// Create Kind cluster
-		if err := k8sManager.CreateCluster(ctx); err != nil {
-			return fmt.Errorf("failed to create Kind cluster: %w", err)
+		if err = k8sManager.CreateCluster(ctx); err != nil {
+			err = fmt.Errorf("failed to create Kind cluster: %w", err)
+			return err
 		}
 	} else {
 		fmt.Printf("ℹ️  Cluster '%s' already exists, proceeding with service installation...\n", cfg.KindClusterName)
 	}
 
 	// Wait for cluster to be ready (API + nodes Ready)
-	if err := k8sManager.WaitForClusterReady(ctx, 1*time.Minute); err != nil {
+	if err = k8sManager.WaitForClusterReady(ctx, 1*time.Minute); err != nil {
 		return err
 	}
 
 	// Now get the Kubernetes client
 	client, err := k8sManager.GetKubernetesClient()
 	if err != nil {
-		return fmt.Errorf("failed to get Kubernetes client: %w", err)
+		err = fmt.Errorf("failed to get Kubernetes client: %w", err)
+		return err
 	}
 
 	helmManager := helm.NewManager(client, &helm.Config{
@@ -146,17 +163,19 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	// Start environment (always install GlassFlow + Kafka + ClickHouse so cluster is ready for setup-demo)
-	if err := installManager.StartEnvironment(ctx, &install.StartOptions{
+	if err = installManager.StartEnvironment(ctx, &install.StartOptions{
 		IncludeDemo: true, // always install all charts; --demo only controls whether we run port-forward + pipeline
 		Namespace:   "glassflow",
 	}); err != nil {
-		return fmt.Errorf("failed to start environment: %w", err)
+		err = fmt.Errorf("failed to start environment: %w", err)
+		return err
 	}
 
 	// Always wait for services to be ready after install (so user knows when cluster is usable)
 	fmt.Println("⏳ Waiting for services to be ready (this can take 10–20+ minutes on first run)...")
-	if err := installManager.WaitForServicesReady(ctx); err != nil {
-		return fmt.Errorf("failed to wait for services: %w", err)
+	if err = installManager.WaitForServicesReady(ctx); err != nil {
+		err = fmt.Errorf("failed to wait for services: %w", err)
+		return err
 	}
 
 	fmt.Println("✅ GlassFlow environment is ready!")
@@ -165,7 +184,8 @@ func runUp(cmd *cobra.Command, args []string) error {
 	fmt.Println("🔗 Setting up port forwarding...")
 	portMapping, err := k8s.SetupPortForwarding(cfg.Context)
 	if err != nil {
-		return fmt.Errorf("failed to setup port forwarding: %w", err)
+		err = fmt.Errorf("failed to setup port forwarding: %w", err)
+		return err
 	}
 	if portMapping != nil {
 		fmt.Println("💡 Port forwarding is running in the background. Use 'glassflow down' to stop it.")
@@ -173,8 +193,9 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	// If --demo, also run demo setup (table + pipeline + producer)
 	if upOptions.Demo {
-		if err := installManager.SetupDemo(ctx, portMapping); err != nil {
-			return fmt.Errorf("failed to setup demo: %w", err)
+		if err = installManager.SetupDemo(ctx, portMapping); err != nil {
+			err = fmt.Errorf("failed to setup demo: %w", err)
+			return err
 		}
 		fmt.Println("✅ Demo pipeline is ready!")
 	} else {
