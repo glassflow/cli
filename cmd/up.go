@@ -77,11 +77,14 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 		err = fmt.Errorf("failed to load config: %w", err)
 		return err
 	}
+	kubeContext := resolveKubeContext(cfg)
 
 	// Initialize managers
 	k8sManager := k8s.NewManager(&k8s.Config{
 		ClusterName: cfg.KindClusterName,
 		Namespace:   "glassflow",
+		Kubeconfig:  cfg.Kubeconfig,
+		Context:     kubeContext,
 	})
 
 	ctx := context.Background()
@@ -117,7 +120,7 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 	helmManager := helm.NewManager(client, &helm.Config{
 		Namespace:    "glassflow",
 		Kubeconfig:   cfg.Kubeconfig,
-		Context:      cfg.Context,
+		Context:      kubeContext,
 		Repositories: []helm.Repository{},
 	})
 
@@ -125,7 +128,7 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 		Namespace:   "glassflow",
 		Demo:        upOptions.Demo,
 		Charts:      &cfg.Charts,
-		KubeContext: cfg.Context,
+		KubeContext: kubeContext,
 	})
 
 	// Check port availability before starting installation
@@ -182,7 +185,7 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 
 	// Start port forwarding (runs in background and persists after CLI exits)
 	fmt.Println("🔗 Setting up port forwarding...")
-	portMapping, err := k8s.SetupPortForwarding(cfg.Context)
+	portMapping, err := k8s.SetupPortForwarding(kubeContext)
 	if err != nil {
 		err = fmt.Errorf("failed to setup port forwarding: %w", err)
 		return err

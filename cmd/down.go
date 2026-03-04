@@ -42,6 +42,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	kubeContext := resolveKubeContext(cfg)
 
 	// Clean up only the port-forwards started by our CLI
 	fmt.Println("🔗 Cleaning up port forwarding...")
@@ -56,6 +57,8 @@ func runDown(cmd *cobra.Command, args []string) error {
 	k8sManager := k8s.NewManager(&k8s.Config{
 		ClusterName: cfg.KindClusterName,
 		Namespace:   cfg.Namespace,
+		Kubeconfig:  cfg.Kubeconfig,
+		Context:     kubeContext,
 	})
 
 	client, err := k8sManager.GetKubernetesClient()
@@ -66,14 +69,15 @@ func runDown(cmd *cobra.Command, args []string) error {
 	helmManager := helm.NewManager(client, &helm.Config{
 		Namespace:    cfg.Namespace,
 		Kubeconfig:   cfg.Kubeconfig,
-		Context:      cfg.Context,
+		Context:      kubeContext,
 		Repositories: []helm.Repository{},
 	})
 
 	installManager := install.NewManager(helmManager, k8sManager, &install.Config{
-		Namespace: cfg.Namespace,
-		Demo:      true, // Always try to uninstall demo services if they exist
-		Charts:    &cfg.Charts,
+		Namespace:   cfg.Namespace,
+		Demo:        true, // Always try to uninstall demo services if they exist
+		Charts:      &cfg.Charts,
+		KubeContext: kubeContext,
 	})
 
 	// Stop environment
