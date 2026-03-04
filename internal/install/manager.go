@@ -73,6 +73,10 @@ func (i *Manager) StartEnvironment(ctx context.Context, opts *StartOptions) erro
 	if err := i.addRepositories(ctx); err != nil {
 		return fmt.Errorf("failed to add repositories: %w", err)
 	}
+	// Refresh repo index so installs use latest chart versions (especially glassflow)
+	if err := i.helmManager.UpdateRepositories(ctx); err != nil {
+		return fmt.Errorf("failed to update helm repositories: %w", err)
+	}
 
 	if opts.IncludeDemo {
 		// Install all charts in parallel for demo mode

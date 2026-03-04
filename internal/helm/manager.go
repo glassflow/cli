@@ -126,6 +126,23 @@ func (h *Manager) AddRepository(ctx context.Context, repoConfig *Repository) err
 	return nil
 }
 
+// UpdateRepositories refreshes the local cache of all configured Helm repos so installs use the latest chart index.
+func (h *Manager) UpdateRepositories(ctx context.Context) error {
+	if h.repoConfigPath == "" {
+		return nil // no custom config, nothing to update
+	}
+	fmt.Printf("🔧 Running: helm repo update\n")
+	args := append(h.helmBaseArgs(), "repo", "update")
+	cmd := exec.CommandContext(ctx, "helm", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = h.helmEnv()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("helm repo update failed: %w", err)
+	}
+	return nil
+}
+
 func (h *Manager) InstallChart(ctx context.Context, opts *InstallOptions) (*Release, error) {
 	var valuesPath string
 	if opts.ValuesFile != "" {
