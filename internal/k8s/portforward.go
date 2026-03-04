@@ -7,10 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -175,10 +173,8 @@ func SetupPortForwarding(kubeContext string) (*PortMapping, error) {
 			cmd.Stdout = nil
 			cmd.Stderr = nil
 		}
-		// Detach so port-forward keeps running after CLI exits (Unix only)
-		if runtime.GOOS != "windows" {
-			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-		}
+		// Apply platform-specific process attributes for detached execution.
+		setDetachedProcessAttrs(cmd)
 		if err := cmd.Start(); err != nil {
 			fmt.Printf("⚠️  Failed to start port forwarding for %s (will retry): %v\n", cfg.name, err)
 			continue
