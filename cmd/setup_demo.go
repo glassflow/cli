@@ -14,8 +14,8 @@ import (
 
 var setupDemoCmd = &cobra.Command{
 	Use:   "setup-demo",
-	Short: "Set up demo pipeline (table creation and pipeline creation)",
-	Long:  `Set up the demo pipeline by creating ClickHouse table and GlassFlow pipeline. This requires services to be already installed and port-forwarding to be active.`,
+	Short: "Set up demo pipeline (port-forward, table, pipeline, producer)",
+	Long:  `Set up the demo pipeline: start port-forwarding, create ClickHouse table, create GlassFlow pipeline, and start the Kafka producer. Run after 'glassflow up' has completed successfully.`,
 	RunE:  runSetupDemo,
 }
 
@@ -49,7 +49,7 @@ func runSetupDemo(cmd *cobra.Command, args []string) error {
 	}
 
 	if status.Status != "Running" {
-		return fmt.Errorf("cluster '%s' is not running. Please run 'glassflow up --demo' first", cfg.KindClusterName)
+		return fmt.Errorf("cluster '%s' is not running. Please run 'glassflow up' first, then run this command", cfg.KindClusterName)
 	}
 
 	// Get Kubernetes client

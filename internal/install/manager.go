@@ -2,7 +2,9 @@ package install
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +19,10 @@ import (
 	"github.com/glassflow/glassflow-cli/internal/k8s"
 )
 
-// Deterministic credentials for demo setup
+//go:embed glassflow_values.yaml
+var glassflowValuesYAML []byte
+
+// Deterministic credentials and namespaces for demo setup
 const (
 	// Kafka credentials
 	DemoKafkaUsername = "user1"
@@ -26,6 +31,15 @@ const (
 	// ClickHouse credentials
 	DemoClickHouseUsername = "default"
 	DemoClickHousePassword = "glassflow-demo-password"
+
+	// Namespaces for Kafka and ClickHouse (GlassFlow stays in config.Namespace, typically "glassflow")
+	KafkaNamespace      = "kafka"
+	ClickHouseNamespace = "clickhouse"
+
+	// Wait timeouts for install phase (first run can take 10–20+ min if pods are scheduling)
+	WaitForServicesTimeout        = 25 * time.Minute
+	WaitForKafkaClickHouseTimeout = 20 * time.Minute
+	WaitProgressInterval          = 30 * time.Second // print status and hints at this interval
 )
 
 type Manager struct {
@@ -58,6 +72,10 @@ func (i *Manager) StartEnvironment(ctx context.Context, opts *StartOptions) erro
 	// Add Helm repositories
 	if err := i.addRepositories(ctx); err != nil {
 		return fmt.Errorf("failed to add repositories: %w", err)
+	}
+	// Refresh repo index so installs use latest chart versions (especially glassflow)
+	if err := i.helmManager.UpdateRepositories(ctx); err != nil {
+		return fmt.Errorf("failed to update helm repositories: %w", err)
 	}
 
 	if opts.IncludeDemo {
@@ -127,7 +145,7 @@ func (i *Manager) StopEnvironment(ctx context.Context) error {
 	if i.config.Demo {
 		if err := i.helmManager.UninstallChart(ctx, &helm.UninstallOptions{
 			ReleaseName: "kafka",
-			Namespace:   i.config.Namespace,
+			Namespace:   KafkaNamespace,
 			Wait:        true,
 		}); err != nil {
 			fmt.Printf("Warning: failed to uninstall Kafka: %v\n", err)
@@ -135,7 +153,7 @@ func (i *Manager) StopEnvironment(ctx context.Context) error {
 
 		if err := i.helmManager.UninstallChart(ctx, &helm.UninstallOptions{
 			ReleaseName: "clickhouse",
-			Namespace:   i.config.Namespace,
+			Namespace:   ClickHouseNamespace,
 			Wait:        true,
 		}); err != nil {
 			fmt.Printf("Warning: failed to uninstall ClickHouse: %v\n", err)
@@ -166,78 +184,31 @@ func (i *Manager) addRepositories(ctx context.Context) error {
 }
 
 func (i *Manager) installGlassFlow(ctx context.Context) error {
-	// Reduced resource values for local Kind cluster MVP
-	// Based on: https://raw.githubusercontent.com/glassflow/charts/refs/heads/main/charts/glassflow-etl/values.yaml
-	values := map[string]interface{}{
-		"glassflow-operator": map[string]interface{}{
-			"glassflowComponents": map[string]interface{}{
-				"ingestor": map[string]interface{}{
-					"resources": map[string]interface{}{
-						"requests": map[string]interface{}{
-							"cpu":    "250m",
-							"memory": "256Mi",
-						},
-						"limits": map[string]interface{}{
-							"cpu":    "500m",
-							"memory": "512Mi",
-						},
-					},
-				},
-				"join": map[string]interface{}{
-					"resources": map[string]interface{}{
-						"requests": map[string]interface{}{
-							"cpu":    "250m",
-							"memory": "256Mi",
-						},
-						"limits": map[string]interface{}{
-							"cpu":    "500m",
-							"memory": "512Mi",
-						},
-					},
-				},
-				"sink": map[string]interface{}{
-					"resources": map[string]interface{}{
-						"requests": map[string]interface{}{
-							"cpu":    "250m",
-							"memory": "256Mi",
-						},
-						"limits": map[string]interface{}{
-							"cpu":    "500m",
-							"memory": "512Mi",
-						},
-					},
-				},
-			},
-		},
-		"nats": map[string]interface{}{
-			"config": map[string]interface{}{
-				"replicas": 2, // Reduced from 3 for MVP
-				// Note: PVC size cannot be changed after StatefulSet creation,
-				// so we don't override it here to allow upgrades
-			},
-			"resources": map[string]interface{}{
-				"requests": map[string]interface{}{
-					"memory": "512Mi", // Reduced from 2Gi
-					"cpu":    "250m",  // Reduced from 500m
-				},
-				"limits": map[string]interface{}{
-					"memory": "1Gi",  // Reduced from 4Gi
-					"cpu":    "500m", // Reduced from 1000m
-				},
-			},
-		},
+	// Write embedded glassflow_values.yaml to a temp file so helm can use -f
+	valuesFile, err := os.CreateTemp("", "glassflow_values_*.yaml")
+	if err != nil {
+		return fmt.Errorf("failed to create values file: %w", err)
+	}
+	valuesPath := valuesFile.Name()
+	defer os.Remove(valuesPath)
+	if _, err := valuesFile.Write(glassflowValuesYAML); err != nil {
+		valuesFile.Close()
+		return fmt.Errorf("failed to write values file: %w", err)
+	}
+	if err := valuesFile.Close(); err != nil {
+		return fmt.Errorf("failed to close values file: %w", err)
 	}
 
-	_, err := i.helmManager.InstallChart(ctx, &helm.InstallOptions{
+	_, err = i.helmManager.InstallChart(ctx, &helm.InstallOptions{
 		Chart:           i.config.Charts.GlassFlow.Chart,
+		Version:         i.config.Charts.GlassFlow.Version, // empty = use latest
 		ReleaseName:     "glassflow",
 		Namespace:       i.config.Namespace,
-		Values:          values,
+		ValuesFile:      valuesPath,
 		CreateNamespace: true,
 		Wait:            false, // Don't wait - allow parallel installation
 		Timeout:         600,
 	})
-
 	return err
 }
 
@@ -254,37 +225,37 @@ func (i *Manager) installKafka(ctx context.Context) error {
 	secretName := "kafka-user-passwords"
 	releaseName := "kafka"
 
-	// Ensure namespace exists before creating secret
-	_, err = k8sClient.CoreV1().Namespaces().Get(ctx, i.config.Namespace, metav1.GetOptions{})
+	// Ensure Kafka namespace exists before creating secret
+	_, err = k8sClient.CoreV1().Namespaces().Get(ctx, KafkaNamespace, metav1.GetOptions{})
 	if err != nil {
 		// Check if error is "not found" - if so, create the namespace
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "NotFound") {
 			namespace := &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: i.config.Namespace,
+					Name: KafkaNamespace,
 				},
 			}
 			if _, createNsErr := k8sClient.CoreV1().Namespaces().Create(ctx, namespace, metav1.CreateOptions{}); createNsErr != nil {
 				// Ignore error if namespace already exists (race condition with parallel installs)
 				if !strings.Contains(createNsErr.Error(), "already exists") {
-					fmt.Printf("⚠️  Warning: Failed to create namespace: %v\n", createNsErr)
+					fmt.Printf("⚠️  Warning: Failed to create namespace %s: %v\n", KafkaNamespace, createNsErr)
 				}
 			}
 		} else {
 			// Other error getting namespace - log but continue (Helm will create it)
-			fmt.Printf("⚠️  Warning: Failed to check namespace: %v\n", err)
+			fmt.Printf("⚠️  Warning: Failed to check namespace %s: %v\n", KafkaNamespace, err)
 		}
 	}
 
 	// Delete existing secret if it exists
-	_ = k8sClient.CoreV1().Secrets(i.config.Namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
+	_ = k8sClient.CoreV1().Secrets(KafkaNamespace).Delete(ctx, secretName, metav1.DeleteOptions{})
 
 	// Create secret with deterministic password and Helm labels for ownership
 	// Note: Chart version in label is not critical - Helm will manage it
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
-			Namespace: i.config.Namespace,
+			Namespace: KafkaNamespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/instance":   releaseName,
 				"app.kubernetes.io/managed-by": "Helm",
@@ -293,7 +264,7 @@ func (i *Manager) installKafka(ctx context.Context) error {
 			},
 			Annotations: map[string]string{
 				"meta.helm.sh/release-name":      releaseName,
-				"meta.helm.sh/release-namespace": i.config.Namespace,
+				"meta.helm.sh/release-namespace": KafkaNamespace,
 			},
 		},
 		Type: corev1.SecretTypeOpaque,
@@ -306,22 +277,34 @@ func (i *Manager) installKafka(ctx context.Context) error {
 	}
 
 	// Create secret before Helm install so it can be used
-	if _, createErr := k8sClient.CoreV1().Secrets(i.config.Namespace).Create(ctx, secret, metav1.CreateOptions{}); createErr != nil {
+	if _, createErr := k8sClient.CoreV1().Secrets(KafkaNamespace).Create(ctx, secret, metav1.CreateOptions{}); createErr != nil {
 		fmt.Printf("⚠️  Warning: Failed to create Kafka secret: %v\n", createErr)
 	} else {
 		fmt.Printf("✅ Created Kafka secret with deterministic password\n")
 	}
 
-	// Kafka installation with 3 brokers for proper replication
-	// This allows default replication factor of 3 for __consumer_offsets topic
-	// For KRaft mode, ensure controller and broker share the same cluster ID
+	// Kafka installation: 1 controller for local Kind dev (reduces storage: 25Gi + 1Gi logs).
+	// KRaft supports single-node for dev; use 3 replicas in production.
+	// Single broker requires offsets.topic.replication.factor=1 so __consumer_offsets can be created (avoids COORDINATOR_NOT_AVAILABLE).
 	values := map[string]interface{}{
-		"replicaCount": 3, // 3 replicas for proper replication (matches default offsets topic replication)
+		"replicaCount": 1,
 		"controller": map[string]interface{}{
-			"replicaCount": 3, // 3 controllers for KRaft quorum
+			"replicaCount": 1,
+			"persistence": map[string]interface{}{
+				"enabled":      true,
+				"size":         "25Gi",
+				"storageClass": "",
+			},
+			"logPersistence": map[string]interface{}{
+				"enabled":      true,
+				"size":         "1Gi",
+				"storageClass": "",
+			},
 		},
-		"persistence": map[string]interface{}{
-			"enabled": false, // Use emptyDir for local dev
+		// Required for single-broker: allow __consumer_offsets and transaction log to be created with 1 replica (avoids COORDINATOR_NOT_AVAILABLE)
+		"overrideConfiguration": map[string]interface{}{
+			"offsets.topic.replication.factor":            "1",
+			"transaction.state.log.replication.factor":     "1",
 		},
 		"image": map[string]interface{}{
 			"registry":   i.config.Charts.Kafka.Image.Registry,
@@ -343,8 +326,9 @@ func (i *Manager) installKafka(ctx context.Context) error {
 
 	_, err = i.helmManager.InstallChart(ctx, &helm.InstallOptions{
 		Chart:           i.config.Charts.Kafka.Chart,
+		Version:         i.config.Charts.Kafka.Version,
 		ReleaseName:     "kafka",
-		Namespace:       i.config.Namespace,
+		Namespace:       KafkaNamespace,
 		Values:          values,
 		CreateNamespace: true,
 		Wait:            false, // Don't wait - allow parallel installation
@@ -407,8 +391,9 @@ func (i *Manager) installClickHouse(ctx context.Context) error {
 
 	_, err := i.helmManager.InstallChart(ctx, &helm.InstallOptions{
 		Chart:           i.config.Charts.ClickHouse.Chart,
+		Version:         i.config.Charts.ClickHouse.Version,
 		ReleaseName:     "clickhouse",
-		Namespace:       i.config.Namespace,
+		Namespace:       ClickHouseNamespace,
 		Values:          values,
 		CreateNamespace: true,
 		Wait:            false, // Don't wait - allow parallel installation
@@ -425,25 +410,54 @@ func (i *Manager) WaitForServicesReady(ctx context.Context) error {
 		return fmt.Errorf("failed to get k8s client: %w", err)
 	}
 
-	services := []string{"glassflow-api", "glassflow-ui", "clickhouse"}
-	timeout := 5 * time.Minute
+	// (namespace, serviceName) - GlassFlow in config namespace, ClickHouse in its own namespace
+	services := []struct{ namespace, name, label string }{
+		{i.config.Namespace, "glassflow-api", "glassflow-api"},
+		{i.config.Namespace, "glassflow-ui", "glassflow-ui"},
+		{ClickHouseNamespace, "clickhouse", "clickhouse"},
+	}
+	timeout := WaitForServicesTimeout
 	deadline := time.Now().Add(timeout)
+	startTime := time.Now()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
+	lastProgress := time.Now()
+	fmt.Println("💡 If pods stay Pending, increase Docker memory/CPU (e.g. Docker Desktop → Settings → Resources).")
+
 	for {
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for services to be ready after %v", timeout)
+			// Report which services are still not ready
+			var notReady []string
+			for _, svc := range services {
+				endpoints, err := k8sClient.CoreV1().Endpoints(svc.namespace).Get(ctx, svc.name, metav1.GetOptions{})
+				if err != nil {
+					notReady = append(notReady, fmt.Sprintf("%s (ns: %s)", svc.name, svc.namespace))
+					continue
+				}
+				hasAddr := false
+				for _, subset := range endpoints.Subsets {
+					if len(subset.Addresses) > 0 {
+						hasAddr = true
+						break
+					}
+				}
+				if !hasAddr {
+					notReady = append(notReady, fmt.Sprintf("%s (ns: %s)", svc.name, svc.namespace))
+				}
+			}
+			return fmt.Errorf("timeout waiting for services after %v (not ready: %v). Check: kubectl get pods -n glassflow -n kafka -n clickhouse; kubectl describe nodes", timeout, notReady)
 		}
 
 		allReady := true
-		for _, svcName := range services {
-			endpoints, err := k8sClient.CoreV1().Endpoints(i.config.Namespace).Get(ctx, svcName, metav1.GetOptions{})
+		var notReady []string
+		for _, svc := range services {
+			endpoints, err := k8sClient.CoreV1().Endpoints(svc.namespace).Get(ctx, svc.name, metav1.GetOptions{})
 			if err != nil {
 				allReady = false
-				break
+				notReady = append(notReady, svc.label)
+				continue
 			}
-			// Check if service has at least one ready endpoint
 			hasReadyEndpoint := false
 			for _, subset := range endpoints.Subsets {
 				if len(subset.Addresses) > 0 {
@@ -453,13 +467,20 @@ func (i *Manager) WaitForServicesReady(ctx context.Context) error {
 			}
 			if !hasReadyEndpoint {
 				allReady = false
-				break
+				notReady = append(notReady, svc.label)
 			}
 		}
 
 		if allReady {
 			fmt.Println("✅ Services are ready")
 			return nil
+		}
+
+		// Progress and debug hints at interval
+		if time.Since(lastProgress) >= WaitProgressInterval {
+			lastProgress = time.Now()
+			elapsed := time.Since(startTime).Round(time.Second)
+			fmt.Printf("⏳ Still waiting for: %v (%s elapsed). Check: kubectl get pods -n glassflow -n kafka -n clickhouse\n", notReady, elapsed)
 		}
 
 		select {
@@ -472,30 +493,31 @@ func (i *Manager) WaitForServicesReady(ctx context.Context) error {
 }
 
 // waitForKafkaAndClickHouse polls until both Kafka and ClickHouse pods are ready
-// Also ensures Kafka broker is actually accepting connections
 func (i *Manager) waitForKafkaAndClickHouse(ctx context.Context) error {
 	k8sClient, err := i.k8sManager.GetKubernetesClient()
 	if err != nil {
 		return fmt.Errorf("failed to get k8s client: %w", err)
 	}
 
-	timeout := 5 * time.Minute
+	timeout := WaitForKafkaClickHouseTimeout
 	deadline := time.Now().Add(timeout)
+	startTime := time.Now()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
+	lastProgress := time.Now()
 	kafkaReadyCount := 0
 	clickhouseReadyCount := 0
 
 	for {
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for Kafka and ClickHouse to be ready after %v", timeout)
+			return fmt.Errorf("timeout waiting for Kafka and ClickHouse after %v. Check: kubectl get pods -n kafka -n clickhouse; kubectl describe nodes", timeout)
 		}
 
-		// Check Kafka readiness
-		kafkaReady := i.checkPodsReady(ctx, k8sClient, "app.kubernetes.io/name=kafka")
-		// Check ClickHouse readiness
-		clickhouseReady := i.checkPodsReady(ctx, k8sClient, "app.kubernetes.io/name=clickhouse")
+		// Check Kafka readiness (in kafka namespace)
+		kafkaReady := i.checkPodsReady(ctx, k8sClient, KafkaNamespace, "app.kubernetes.io/name=kafka")
+		// Check ClickHouse readiness (in clickhouse namespace)
+		clickhouseReady := i.checkPodsReady(ctx, k8sClient, ClickHouseNamespace, "app.kubernetes.io/name=clickhouse")
 
 		if kafkaReady {
 			kafkaReadyCount++
@@ -510,13 +532,25 @@ func (i *Manager) waitForKafkaAndClickHouse(ctx context.Context) error {
 		}
 
 		// Require pods to be ready for at least 3 consecutive checks (6 seconds)
-		// This ensures Kafka coordinator is fully initialized
 		if kafkaReadyCount >= 3 && clickhouseReadyCount >= 3 {
 			fmt.Println("✅ Kafka and ClickHouse are ready")
 			return nil
 		}
 
-		// Wait before next check
+		// Progress and debug hints at interval
+		if time.Since(lastProgress) >= WaitProgressInterval {
+			lastProgress = time.Now()
+			elapsed := time.Since(startTime).Round(time.Second)
+			status := []string{}
+			if kafkaReadyCount < 3 {
+				status = append(status, "Kafka")
+			}
+			if clickhouseReadyCount < 3 {
+				status = append(status, "ClickHouse")
+			}
+			fmt.Printf("⏳ Waiting for %v pods (%s elapsed). Check: kubectl get pods -n kafka -n clickhouse\n", status, elapsed)
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -526,9 +560,63 @@ func (i *Manager) waitForKafkaAndClickHouse(ctx context.Context) error {
 	}
 }
 
-// checkPodsReady checks if all pods matching the selector are ready
-func (i *Manager) checkPodsReady(ctx context.Context, client kubernetes.Interface, selector string) bool {
-	pods, err := client.CoreV1().Pods(i.config.Namespace).List(ctx, metav1.ListOptions{
+// waitForPipelineReady polls the pipeline health endpoint until overall_status is "Running" or "Failed".
+// Returns nil when running, or an error when failed or timeout.
+func waitForPipelineReady(ctx context.Context, apiClient *demo.APIClient, pipelineID string) error {
+	const (
+		pollInterval = 3 * time.Second
+		timeout      = 5 * time.Minute
+	)
+	deadline := time.Now().Add(timeout)
+	startTime := time.Now()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	fmt.Print("\n⏳ Waiting for pipeline to reach running state")
+	pollCount := 0
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for pipeline to become ready after %v", timeout)
+		}
+		health, err := apiClient.GetPipelineHealth(ctx, pipelineID)
+		if err != nil {
+			if demo.IsConnectionError(err) {
+				// Transient; keep polling
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-ticker.C:
+					continue
+				}
+			}
+			return fmt.Errorf("failed to get pipeline health: %w", err)
+		}
+		status := strings.TrimSpace(strings.ToLower(health.OverallStatus))
+		switch status {
+		case "running":
+			fmt.Printf("\n✅ Pipeline is running (took %s)\n", time.Since(startTime).Round(time.Second))
+			return nil
+		case "failed":
+			return fmt.Errorf("pipeline entered failed state (pipeline_id=%s). Check GlassFlow UI or logs for details", pipelineID)
+		default:
+			// Pending, starting, etc. - keep polling
+			pollCount++
+			if pollCount%10 == 0 {
+				fmt.Print(".")
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			// continue
+		}
+	}
+}
+
+// checkPodsReady checks if all pods matching the selector in the given namespace are ready
+func (i *Manager) checkPodsReady(ctx context.Context, client kubernetes.Interface, namespace, selector string) bool {
+	pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: selector,
 	})
 	if err != nil {
@@ -575,6 +663,8 @@ func (i *Manager) setupDemo(ctx context.Context, portMapping *k8s.PortMapping) e
 	if err != nil {
 		return fmt.Errorf("failed to load pipeline request: %w", err)
 	}
+	// Pipeline ID from request JSON (e.g. demo-pipeline-qasxjh) is used for health polling
+	pipelineIDFromRequest, _ := demo.GetPipelineIDFromRequest(pipelineJSONPath)
 
 	clickhouseSQLPath, err := demo.LoadClickHouseSQLPath()
 	if err != nil {
@@ -589,7 +679,7 @@ func (i *Manager) setupDemo(ctx context.Context, portMapping *k8s.PortMapping) e
 
 	// Step 1: Create ClickHouse table
 	clickhousePassword := DemoClickHousePassword
-	if secret, err := i.k8sManager.GetSecret(ctx, "clickhouse", i.config.Namespace); err == nil {
+	if secret, err := i.k8sManager.GetSecret(ctx, "clickhouse", ClickHouseNamespace); err == nil {
 		if pwd, ok := secret["admin-password"]; ok && len(pwd) > 0 {
 			clickhousePassword = string(pwd)
 		}
@@ -635,17 +725,27 @@ func (i *Manager) setupDemo(ctx context.Context, portMapping *k8s.PortMapping) e
 		}
 
 		// Try to create pipeline
-		err := apiClient.CreatePipeline(ctx, pipelineJSONPath, DemoKafkaUsername, kafkaPassword, DemoClickHouseUsername, DemoClickHousePassword)
+		pipelineID, err := apiClient.CreatePipeline(ctx, pipelineJSONPath, DemoKafkaUsername, kafkaPassword, DemoClickHouseUsername, DemoClickHousePassword)
 		if err == nil {
 			// Success
 			fmt.Printf("\n✅ Pipeline created successfully (after %d attempts, %v elapsed)\n", attempt, elapsed.Round(time.Second))
+			// Use pipeline ID from API response, or from request JSON (e.g. demo-pipeline-qasxjh) for health polling
+			healthPollID := pipelineID
+			if healthPollID == "" {
+				healthPollID = pipelineIDFromRequest
+			}
+			if healthPollID != "" {
+				if waitErr := waitForPipelineReady(ctx, apiClient, healthPollID); waitErr != nil {
+					return waitErr
+				}
+			}
 			break
 		}
 
 		// Check if it's a connection error - might indicate port forward is down
 		if demo.IsConnectionError(err) {
 			fmt.Printf("\n🔄 Connection error detected, restarting port forwarding for GlassFlow API...\n")
-			if restartErr := k8s.RestartPortForwardForService(i.config.KubeContext, "glassflow-api", portMapping.GlassFlowAPI, 8081); restartErr != nil {
+			if restartErr := k8s.RestartPortForwardForService(i.config.KubeContext, i.config.Namespace, "glassflow-api", portMapping.GlassFlowAPI, 8081); restartErr != nil {
 				fmt.Printf("⚠️  Failed to restart port forwarding: %v\n", restartErr)
 			} else {
 				fmt.Printf("✅ Port forwarding restarted, retrying request...\n")
@@ -679,7 +779,7 @@ func (i *Manager) setupDemo(ctx context.Context, portMapping *k8s.PortMapping) e
 		ctx,
 		k8sClient,
 		i.config.Namespace,
-		"kafka.glassflow.svc.cluster.local:9092",
+		"kafka.kafka.svc.cluster.local:9092",
 		"demo-events",
 		DemoKafkaUsername,
 		producerKafkaPassword,

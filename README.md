@@ -22,7 +22,10 @@ The GlassFlow CLI provides a quick way to set up a local development environment
 ### Prerequisites
 
 - **Docker** (or compatible runtime like Docker Desktop, OrbStack, Colima, or Podman)
+- **Helm** (v3) – used to install charts ([install Helm](https://helm.sh/docs/intro/install/))
 - **kubectl** (installed automatically via Homebrew, or install manually)
+
+Give Docker enough resources (e.g. 6–8 GB RAM, 4 CPUs) so all pods can schedule. If pods stay **Pending**, increase memory/CPU in Docker Desktop → Settings → Resources.
 
 ### Installation
 
@@ -39,19 +42,29 @@ Download the latest release for your platform from [GitHub Releases](https://git
 
 ### Usage
 
-Start the local development environment with demo data:
+**Recommended: two steps**
+
+1. **Install** (create cluster and install services). This can take 10–20+ minutes on first run:
+
+   ```bash
+   glassflow up
+   ```
+
+   The CLI waits until GlassFlow, Kafka, and ClickHouse services are ready. If it seems stuck, it prints progress and hints (e.g. `kubectl get pods -n glassflow -n kafka -n clickhouse`).
+
+2. **Set up the demo** (port-forwarding, ClickHouse table, pipeline, Kafka producer):
+
+   ```bash
+   glassflow setup-demo
+   ```
+
+**All-in-one** (install and demo in a single run):
 
 ```bash
 glassflow up --demo
 ```
 
-This command will:
-- Create a local Kubernetes cluster using [Kind](https://kind.sigs.k8s.io/)
-- Install Kafka, ClickHouse, and GlassFlow using Helm charts
-- Set up a demo pipeline with sample data
-- Configure port forwarding for UI and API access
-
-Once started, you can access:
+Once running, you can access (ports may vary if alternatives were chosen):
 - **GlassFlow UI**: http://localhost:30080
 - **GlassFlow API**: http://localhost:30180
 - **ClickHouse HTTP**: http://localhost:30090
@@ -64,18 +77,29 @@ glassflow down
 
 ## What Gets Installed
 
-When running `glassflow up --demo`, the CLI installs:
+When you run `glassflow up`, the CLI:
 
-- **Kind**: Local Kubernetes cluster
-- **Kafka**: Message broker (Bitnami Helm chart)
-- **ClickHouse**: Columnar database (Bitnami Helm chart)
-- **GlassFlow ETL**: Real-time streaming ETL service (GlassFlow Helm chart)
-- **Demo Pipeline**: Pre-configured pipeline with sample data
+- Creates a **Kind** cluster (if needed)
+- Installs **GlassFlow ETL** (glassflow namespace) via Helm
+- Installs **Kafka** (kafka namespace) and **ClickHouse** (clickhouse namespace) via Helm
+- Waits for all services to be ready (up to ~25 minutes)
+
+Running `glassflow setup-demo` then:
+
+- Starts port-forwarding for the UI, API, and ClickHouse
+- Creates the ClickHouse demo table and the GlassFlow demo pipeline
+- Deploys a Kafka producer that sends sample events to the pipeline
 
 ## Commands
 
 ```bash
-# Start local environment with demo
+# Install only (recommended first step)
+glassflow up
+
+# Set up demo pipeline (run after 'glassflow up' succeeds)
+glassflow setup-demo
+
+# Install and set up demo in one go
 glassflow up --demo
 
 # Stop and clean up environment
@@ -84,7 +108,8 @@ glassflow down
 # Show version
 glassflow version
 
-# Get help
+# Use a custom config file
+glassflow up -c /path/to/config.yaml
 glassflow --help
 ```
 
