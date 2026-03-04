@@ -22,7 +22,7 @@ The GlassFlow CLI provides a quick way to set up a local development environment
 ### Prerequisites
 
 - **Docker** (or compatible runtime like Docker Desktop, OrbStack, Colima, or Podman)
-- **Helm** (v3) – used to install charts ([install Helm](https://helm.sh/docs/intro/install/))
+- **Helm** (v3) – used to install charts (installed automatically via Homebrew, or [install manually](https://helm.sh/docs/intro/install/))
 - **kubectl** (installed automatically via Homebrew, or install manually)
 
 Give Docker enough resources (e.g. 6–8 GB RAM, 4 CPUs) so all pods can schedule. If pods stay **Pending**, increase memory/CPU in Docker Desktop → Settings → Resources.
