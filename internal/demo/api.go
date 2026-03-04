@@ -18,10 +18,10 @@ import (
 //go:embed demo_pipeline_request.json
 var defaultPipelineRequestJSON []byte
 
-// version is set by SetVersion and used for downloading files from GitHub
+// version is set by SetVersion and included in demo API request headers.
 var version string = "dev"
 
-// SetVersion sets the version for downloading files from GitHub
+// SetVersion sets the CLI version used in demo API requests.
 func SetVersion(v string) {
 	version = v
 }
@@ -62,11 +62,11 @@ func NewAPIClient(baseURL string) *APIClient {
 
 // PipelineHealthResponse is the response from GET /api/v1/pipeline/{id}/health
 type PipelineHealthResponse struct {
-	CreatedAt      string `json:"created_at"`
-	OverallStatus  string `json:"overall_status"`
-	PipelineID     string `json:"pipeline_id"`
-	PipelineName   string `json:"pipeline_name"`
-	UpdatedAt      string `json:"updated_at"`
+	CreatedAt     string `json:"created_at"`
+	OverallStatus string `json:"overall_status"`
+	PipelineID    string `json:"pipeline_id"`
+	PipelineName  string `json:"pipeline_name"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 // GetPipelineHealth fetches the health status for a pipeline (GET /api/v1/pipeline/{id}/health).
@@ -156,17 +156,18 @@ func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, 
 
 	// Debug: Log pipeline configuration
 	debugBody := make(map[string]interface{})
-	json.Unmarshal(data, &debugBody) // Ignore error, this is just for logging
-	if source, ok := debugBody["source"].(map[string]interface{}); ok {
-		if connParams, ok := source["connection_params"].(map[string]interface{}); ok {
-			if username, ok := connParams["username"].(string); ok && len(username) > 0 {
-				connParams["username"] = "[REDACTED]"
+	if err := json.Unmarshal(data, &debugBody); err == nil {
+		if source, ok := debugBody["source"].(map[string]interface{}); ok {
+			if connParams, ok := source["connection_params"].(map[string]interface{}); ok {
+				if username, ok := connParams["username"].(string); ok && len(username) > 0 {
+					connParams["username"] = "[REDACTED]"
+				}
+				if password, ok := connParams["password"].(string); ok && len(password) > 0 {
+					connParams["password"] = "[REDACTED]"
+				}
+				fmt.Printf("🔍 Kafka connection config: protocol=%v, mechanism=%v, username=%v, password=%v\n",
+					connParams["protocol"], connParams["mechanism"], connParams["username"], connParams["password"])
 			}
-			if password, ok := connParams["password"].(string); ok && len(password) > 0 {
-				connParams["password"] = "[REDACTED]"
-			}
-			fmt.Printf("🔍 Kafka connection config: protocol=%v, mechanism=%v, username=%v, password=%v\n",
-				connParams["protocol"], connParams["mechanism"], connParams["username"], connParams["password"])
 		}
 	}
 
@@ -176,6 +177,7 @@ func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, 
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", fmt.Sprintf("glassflow-cli/%s", version))
 
 	// Send request
 	resp, err := c.client.Do(req)
