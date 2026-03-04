@@ -12,10 +12,10 @@ import (
 
 type Manager struct {
 	repoConfigPath string
-	repoCachePath   string
-	kubeconfig      string
-	kubeContext     string
-	config          *Config
+	repoCachePath  string
+	kubeconfig     string
+	kubeContext    string
+	config         *Config
 }
 
 type Config struct {
@@ -36,7 +36,7 @@ type InstallOptions struct {
 	ReleaseName     string
 	Namespace       string
 	Values          map[string]interface{} // used when ValuesFile is empty
-	ValuesFile      string                // when set, passed as -f to helm (overrides Values)
+	ValuesFile      string                 // when set, passed as -f to helm (overrides Values)
 	CreateNamespace bool
 	Wait            bool
 	Timeout         int
@@ -97,6 +97,12 @@ func (h *Manager) helmBaseArgs() []string {
 	args := []string{}
 	if h.repoConfigPath != "" {
 		args = append(args, "--repository-config", h.repoConfigPath, "--repository-cache", h.repoCachePath)
+	}
+	if h.kubeconfig != "" {
+		args = append(args, "--kubeconfig", h.kubeconfig)
+	}
+	if h.kubeContext != "" {
+		args = append(args, "--kube-context", h.kubeContext)
 	}
 	return args
 }

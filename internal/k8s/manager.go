@@ -22,6 +22,8 @@ type Manager struct {
 type Config struct {
 	ClusterName string
 	Namespace   string
+	Kubeconfig  string
+	Context     string
 }
 
 type ClusterStatus struct {
@@ -90,9 +92,18 @@ func (m *Manager) GetKubernetesClient() (kubernetes.Interface, error) {
 
 // GetRESTConfig returns a REST config for connecting to the current cluster.
 func (m *Manager) GetRESTConfig() (*rest.Config, error) {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if m.config != nil && m.config.Kubeconfig != "" {
+		loadingRules.ExplicitPath = m.config.Kubeconfig
+	}
+	overrides := &clientcmd.ConfigOverrides{}
+	if m.config != nil && m.config.Context != "" {
+		overrides.CurrentContext = m.config.Context
+	}
+
 	kubeconfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(),
-		&clientcmd.ConfigOverrides{},
+		loadingRules,
+		overrides,
 	)
 	restConfig, err := kubeconfig.ClientConfig()
 	if err != nil {

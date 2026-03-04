@@ -34,11 +34,14 @@ func runSetupDemo(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	kubeContext := resolveKubeContext(cfg)
 
 	// Initialize managers
 	k8sManager := k8s.NewManager(&k8s.Config{
 		ClusterName: cfg.KindClusterName,
 		Namespace:   "glassflow",
+		Kubeconfig:  cfg.Kubeconfig,
+		Context:     kubeContext,
 	})
 
 	// Check if cluster exists
@@ -61,7 +64,7 @@ func runSetupDemo(cmd *cobra.Command, args []string) error {
 	helmManager := helm.NewManager(client, &helm.Config{
 		Namespace:    "glassflow",
 		Kubeconfig:   cfg.Kubeconfig,
-		Context:      cfg.Context,
+		Context:      kubeContext,
 		Repositories: []helm.Repository{},
 	})
 
@@ -69,12 +72,12 @@ func runSetupDemo(cmd *cobra.Command, args []string) error {
 		Namespace:   "glassflow",
 		Demo:        true,
 		Charts:      &cfg.Charts,
-		KubeContext: cfg.Context,
+		KubeContext: kubeContext,
 	})
 
 	// Set up port forwarding
 	fmt.Println("🔗 Setting up port forwarding...")
-	portMapping, err := k8s.SetupPortForwarding(cfg.Context)
+	portMapping, err := k8s.SetupPortForwarding(kubeContext)
 	if err != nil {
 		return fmt.Errorf("failed to setup port forwarding: %w", err)
 	}
