@@ -66,6 +66,7 @@ func runSetupDemo(cmd *cobra.Command, args []string) error {
 		Kubeconfig:   cfg.Kubeconfig,
 		Context:      kubeContext,
 		Repositories: []helm.Repository{},
+		Verbose:      verbose,
 	})
 
 	installManager := install.NewManager(helmManager, k8sManager, &install.Config{

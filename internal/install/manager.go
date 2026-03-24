@@ -79,6 +79,7 @@ func (i *Manager) StartEnvironment(ctx context.Context, opts *StartOptions) erro
 	}
 
 	if opts.IncludeDemo {
+		fmt.Println("📦 Installing services (GlassFlow, Kafka, ClickHouse)...")
 		// Install all charts in parallel for demo mode
 		var wg sync.WaitGroup
 		var glassflowErr, kafkaErr, clickhouseErr error
@@ -89,18 +90,27 @@ func (i *Manager) StartEnvironment(ctx context.Context, opts *StartOptions) erro
 		go func() {
 			defer wg.Done()
 			glassflowErr = i.installGlassFlow(ctx)
+			if glassflowErr == nil {
+				fmt.Println("   ✅ GlassFlow installed")
+			}
 		}()
 
 		// Install Kafka chart (no wait, runs in parallel)
 		go func() {
 			defer wg.Done()
 			kafkaErr = i.installKafka(ctx)
+			if kafkaErr == nil {
+				fmt.Println("   ✅ Kafka installed")
+			}
 		}()
 
 		// Install ClickHouse chart (no wait, runs in parallel)
 		go func() {
 			defer wg.Done()
 			clickhouseErr = i.installClickHouse(ctx)
+			if clickhouseErr == nil {
+				fmt.Println("   ✅ ClickHouse installed")
+			}
 		}()
 
 		wg.Wait()
@@ -280,7 +290,7 @@ func (i *Manager) installKafka(ctx context.Context) error {
 	if _, createErr := k8sClient.CoreV1().Secrets(KafkaNamespace).Create(ctx, secret, metav1.CreateOptions{}); createErr != nil {
 		fmt.Printf("⚠️  Warning: Failed to create Kafka secret: %v\n", createErr)
 	} else {
-		fmt.Printf("✅ Created Kafka secret with deterministic password\n")
+		// Kafka secret created (deterministic password for demo)
 	}
 
 	// Kafka installation: 1 controller for local Kind dev (reduces storage: 25Gi + 1Gi logs).

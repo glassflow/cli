@@ -3,7 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/glassflow/glassflow-cli/internal/config"
@@ -43,6 +46,56 @@ func checkDockerRuntime() error {
 		return fmt.Errorf("no Docker-compatible runtime detected. Please install and start a Docker-compatible runtime (e.g., Docker Desktop, OrbStack, Colima, or Podman) and ensure 'docker info' succeeds: %w", err)
 	}
 	return nil
+}
+
+// imageArchivePath returns the path to the pre-built image bundle at ~/.glassflow/glassflow-images.tar.gz.
+func imageArchivePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".glassflow", "glassflow-images.tar.gz")
+}
+
+// loadImageArchive loads a pre-built image bundle into the Kind cluster to skip image pulls.
+// Supports both .tar.gz and .tar files. Returns true if images were loaded.
+func loadImageArchive(clusterName string) bool {
+	archive := imageArchivePath()
+	if archive == "" {
+		return false
+	}
+
+	// Check for .tar.gz first, then .tar
+	gzPath := archive
+	tarPath := strings.TrimSuffix(archive, ".gz")
+	archiveToLoad := ""
+
+	if _, err := os.Stat(gzPath); err == nil {
+		// Decompress .tar.gz to .tar for kind (which doesn't support gzip)
+		fmt.Println("📦 Decompressing image bundle...")
+		gunzip := exec.Command("gunzip", "-k", "-f", gzPath)
+		if err := gunzip.Run(); err != nil {
+			fmt.Printf("⚠️  Failed to decompress image bundle: %v\n", err)
+			return false
+		}
+		archiveToLoad = tarPath
+	} else if _, err := os.Stat(tarPath); err == nil {
+		archiveToLoad = tarPath
+	} else {
+		return false
+	}
+
+	fmt.Println("📦 Loading pre-built image bundle (skipping image pulls)...")
+	cmd := exec.Command("kind", "load", "image-archive", archiveToLoad, "--name", clusterName)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("⚠️  Failed to load image bundle: %v\n", err)
+		fmt.Println("   Continuing without pre-loaded images (pods will pull images normally).")
+		return false
+	}
+	fmt.Println("✅ Pre-built images loaded into cluster")
+	return true
 }
 
 func runUp(cmd *cobra.Command, args []string) (err error) {
@@ -110,6 +163,9 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 		return err
 	}
 
+	// Load pre-built image bundle if available (speeds up first install significantly)
+	loadImageArchive(cfg.KindClusterName)
+
 	// Now get the Kubernetes client
 	client, err := k8sManager.GetKubernetesClient()
 	if err != nil {
@@ -122,6 +178,7 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 		Kubeconfig:   cfg.Kubeconfig,
 		Context:      kubeContext,
 		Repositories: []helm.Repository{},
+		Verbose:      verbose,
 	})
 
 	installManager := install.NewManager(helmManager, k8sManager, &install.Config{
@@ -175,7 +232,7 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 	}
 
 	// Always wait for services to be ready after install (so user knows when cluster is usable)
-	fmt.Println("⏳ Waiting for services to be ready (this can take 10–20+ minutes on first run)...")
+	fmt.Println("⏳ Waiting for services to be ready...")
 	if err = installManager.WaitForServicesReady(ctx); err != nil {
 		err = fmt.Errorf("failed to wait for services: %w", err)
 		return err
