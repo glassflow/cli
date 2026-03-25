@@ -3,9 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/glassflow/glassflow-cli/internal/config"
@@ -46,17 +49,101 @@ func checkDockerRuntime() error {
 	return nil
 }
 
-// loadImageBundle loads a tar.gz image bundle from ~/.glassflow/ into the Kind cluster.
-// Returns true if images were loaded, false if bundle not found (non-fatal).
-func loadImageBundle(clusterName, bundleName string) bool {
+// downloadFile downloads a URL to a local file path. Returns nil on success.
+func downloadFile(url, destPath string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+		return err
+	}
+	tmp := destPath + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	f.Close()
+	return os.Rename(tmp, destPath)
+}
+
+// invalidateStaleCache removes cached image bundles if the CLI version has changed.
+func invalidateStaleCache() {
+	if version == "" || version == "dev" {
+		return
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return false
+		return
+	}
+	dir := filepath.Join(home, ".glassflow")
+	versionFile := filepath.Join(dir, "images_version")
+
+	data, err := os.ReadFile(versionFile)
+	if err == nil && strings.TrimSpace(string(data)) == version {
+		return // version matches, cache is valid
+	}
+
+	// Version mismatch or no version file — remove stale bundles
+	for _, name := range []string{"glassflow-images.tar.gz", "glassflow-images.tar", "demo-images.tar.gz", "demo-images.tar"} {
+		os.Remove(filepath.Join(dir, name))
+	}
+
+	// Write current version
+	_ = os.MkdirAll(dir, 0o755)
+	_ = os.WriteFile(versionFile, []byte(version), 0o644)
+}
+
+// ensureImageBundle checks for the image bundle locally, downloads from GitHub release if missing.
+func ensureImageBundle(bundleName string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
 	}
 	gzPath := filepath.Join(home, ".glassflow", bundleName+".tar.gz")
-	tarPath := filepath.Join(home, ".glassflow", bundleName+".tar")
 
+	// Already cached locally
+	if _, err := os.Stat(gzPath); err == nil {
+		return gzPath
+	}
+
+	// Skip download for dev builds
+	if version == "" || version == "dev" {
+		return ""
+	}
+
+	url := fmt.Sprintf("https://github.com/glassflow/cli/releases/download/v%s/%s.tar.gz", version, bundleName)
+	fmt.Printf("📥 Downloading %s (first run only)...\n", bundleName)
+	if err := downloadFile(url, gzPath); err != nil {
+		fmt.Printf("⚠️  Download failed: %v\n", err)
+		fmt.Println("   Pods will pull images normally (slower first run).")
+		return ""
+	}
+	fmt.Printf("✅ Downloaded %s\n", bundleName)
+	return gzPath
+}
+
+// loadImageBundle downloads (if needed) and loads an image bundle into the Kind cluster.
+// Returns true if images were loaded, false otherwise (non-fatal).
+func loadImageBundle(clusterName, bundleName string) bool {
+	gzPath := ensureImageBundle(bundleName)
+	if gzPath == "" {
+		return false
+	}
+
+	tarPath := gzPath[:len(gzPath)-3] // strip .gz
 	archiveToLoad := ""
+
 	if _, err := os.Stat(gzPath); err == nil {
 		fmt.Printf("📦 Decompressing %s...\n", bundleName)
 		gunzip := exec.Command("gunzip", "-k", "-f", gzPath)
@@ -148,6 +235,9 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 	if err = k8sManager.WaitForClusterReady(ctx, 1*time.Minute); err != nil {
 		return err
 	}
+
+	// Invalidate cached image bundles if CLI version changed
+	invalidateStaleCache()
 
 	// Load pre-built image bundles if available (speeds up first install significantly)
 	loadImageBundle(cfg.KindClusterName, "glassflow-images")
