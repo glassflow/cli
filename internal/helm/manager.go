@@ -39,6 +39,7 @@ type InstallOptions struct {
 	Namespace       string
 	Values          map[string]interface{} // used when ValuesFile is empty
 	ValuesFile      string                 // when set, passed as -f to helm (overrides Values)
+	SetValues       map[string]string      // extra --set key=value pairs (applied on top of ValuesFile/Values)
 	CreateNamespace bool
 	Wait            bool
 	Timeout         int
@@ -218,6 +219,9 @@ func (h *Manager) InstallChart(ctx context.Context, opts *InstallOptions) (*Rele
 	}
 	if opts.Wait {
 		args = append(args, "--wait")
+	}
+	for k, v := range opts.SetValues {
+		args = append(args, "--set", k+"="+v)
 	}
 
 	cmd := exec.CommandContext(ctx, "helm", args...)

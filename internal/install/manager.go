@@ -50,10 +50,11 @@ type Manager struct {
 }
 
 type Config struct {
-	Namespace   string
-	Demo        bool
-	Charts      *config.ChartsConfig
-	KubeContext string // For port forwarding restarts
+	Namespace      string
+	Demo           bool
+	Charts         *config.ChartsConfig
+	KubeContext    string // For port forwarding restarts
+	InstallationID string // Persistent CLI installation ID for unified tracking
 }
 
 type StartOptions struct {
@@ -257,12 +258,18 @@ func (i *Manager) installGlassFlow(ctx context.Context) error {
 		return fmt.Errorf("failed to close values file: %w", err)
 	}
 
+	setValues := map[string]string{}
+	if i.config.InstallationID != "" {
+		setValues["global.usageStats.installationId"] = i.config.InstallationID
+	}
+
 	_, err = i.helmManager.InstallChart(ctx, &helm.InstallOptions{
 		Chart:           i.config.Charts.GlassFlow.Chart,
 		Version:         i.config.Charts.GlassFlow.Version, // empty = use latest
 		ReleaseName:     "glassflow",
 		Namespace:       i.config.Namespace,
 		ValuesFile:      valuesPath,
+		SetValues:       setValues,
 		CreateNamespace: true,
 		Wait:            false, // Don't wait - allow parallel installation
 		Timeout:         600,
