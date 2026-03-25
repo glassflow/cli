@@ -41,34 +41,35 @@ Download the latest release for your platform from [GitHub Releases](https://git
 
 ### Usage
 
-**Recommended: two steps**
+**Step 1: Start GlassFlow**
 
-1. **Install** (create cluster and install services). This can take 10–20+ minutes on first run:
+```bash
+glassflow up
+```
 
-   ```bash
-   glassflow up
-   ```
+This creates a Kind cluster and installs GlassFlow. Once ready, you can access:
+- **GlassFlow UI**: http://localhost:30080
+- **GlassFlow API**: http://localhost:30180
 
-   The CLI waits until GlassFlow, Kafka, and ClickHouse services are ready. If it seems stuck, it prints progress and hints (e.g. `kubectl get pods -n glassflow -n kafka -n clickhouse`).
+From the UI, you can connect to your own Kafka and ClickHouse instances.
 
-2. **Set up the demo** (port-forwarding, ClickHouse table, pipeline, Kafka producer):
+**Step 2 (optional): Run the demo**
 
-   ```bash
-   glassflow setup-demo
-   ```
+To see data flowing end-to-end with a local Kafka and ClickHouse:
 
-**All-in-one** (install and demo in a single run):
+```bash
+glassflow setup-demo
+```
+
+This installs Kafka + ClickHouse, creates a demo pipeline, and starts a Kafka producer sending sample events.
+
+**All-in-one** (GlassFlow + Kafka + ClickHouse + demo pipeline):
 
 ```bash
 glassflow up --demo
 ```
 
-Once running, you can access (ports may vary if alternatives were chosen):
-- **GlassFlow UI**: http://localhost:30080
-- **GlassFlow API**: http://localhost:30180
-- **ClickHouse HTTP**: http://localhost:30090
-
-Stop the environment:
+**Stop the environment:**
 
 ```bash
 glassflow down
@@ -76,33 +77,34 @@ glassflow down
 
 ## What Gets Installed
 
-When you run `glassflow up`, the CLI:
+**`glassflow up`** creates a Kind cluster and installs:
+- **GlassFlow ETL** (API, UI, operator, NATS, PostgreSQL) in the `glassflow` namespace
+- Port forwarding for the GlassFlow UI and API
 
-- Creates a **Kind** cluster (if needed)
-- Installs **GlassFlow ETL** (glassflow namespace) via Helm
-- Installs **Kafka** (kafka namespace) and **ClickHouse** (clickhouse namespace) via Helm
-- Waits for all services to be ready (up to ~25 minutes)
+**`glassflow setup-demo`** adds:
+- **Kafka** (kafka namespace) and **ClickHouse** (clickhouse namespace)
+- A demo pipeline with a Kafka producer sending sample events
+- Port forwarding for ClickHouse HTTP (http://localhost:30090)
 
-Running `glassflow setup-demo` then:
-
-- Starts port-forwarding for the UI, API, and ClickHouse
-- Creates the ClickHouse demo table and the GlassFlow demo pipeline
-- Deploys a Kafka producer that sends sample events to the pipeline
+**`glassflow up --demo`** does both in one step.
 
 ## Commands
 
 ```bash
-# Install only (recommended first step)
+# Start GlassFlow (Kind cluster + GlassFlow only)
 glassflow up
 
-# Set up demo pipeline (run after 'glassflow up' succeeds)
+# Set up demo (installs Kafka + ClickHouse + demo pipeline)
 glassflow setup-demo
 
-# Install and set up demo in one go
+# All-in-one (GlassFlow + Kafka + ClickHouse + demo)
 glassflow up --demo
 
-# Stop and clean up environment
+# Stop and clean up
 glassflow down
+
+# Force stop (skip Helm uninstall, delete cluster directly)
+glassflow down --force
 
 # Show version
 glassflow version

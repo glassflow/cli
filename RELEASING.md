@@ -55,29 +55,35 @@ This triggers the GitHub Actions workflow which:
 
 Check https://github.com/glassflow/cli/releases for:
 - [ ] CLI binaries for linux/darwin/windows (amd64 + arm64)
-- [ ] `glassflow-images.tar.gz` (~1.1 GB)
+- [ ] `glassflow-images.tar.gz` (~724 MB) — core GlassFlow images
+- [ ] `demo-images.tar.gz` (~674 MB) — Kafka + ClickHouse images
 - [ ] `checksums.txt`
 
 ### 6. Update Homebrew tap (manual)
 
 If you maintain a Homebrew tap, update the formula with the new version and checksums.
 
-## What's in the image bundle
+## What's in the image bundles
 
-The `glassflow-images.tar.gz` contains all container images needed by `glassflow up`:
-- GlassFlow ETL components (API, UI, operator, migration, ingestor, sink, join, dedup)
-- Kafka (Bitnami)
-- ClickHouse + Keeper (Bitnami)
+Two separate bundles are built to match the modular install flow:
+
+**`glassflow-images.tar.gz`** (loaded by `glassflow up`):
+- GlassFlow ETL components (API, UI, operator, migration, ingestor, sink, join, dedup, notifier)
 - NATS + config reloader
 - PostgreSQL
-- Utility images (curl, busybox, kubectl, python)
+- Utility images (curl, busybox, kubectl)
 
-Image versions are resolved dynamically from the published Helm charts at build time — they are **not hardcoded** in the build script.
+**`demo-images.tar.gz`** (loaded by `glassflow setup-demo` and `glassflow up --demo`):
+- Kafka (Bitnami)
+- ClickHouse + Keeper (Bitnami)
+- Python (demo producer)
 
-## How the bundle works
+Image versions are resolved dynamically from the **published Helm charts** at build time — they are **not hardcoded** in the build script and are not affected by local development versions.
 
-1. `resolve-images.sh` runs `helm template` on all charts → extracts image references
-2. `build.sh` pulls all images and saves them as a single `.tar.gz`
-3. Users place the file at `~/.glassflow/glassflow-images.tar.gz`
-4. `glassflow up` detects the file and runs `kind load image-archive` after cluster creation
-5. Result: pods start immediately without pulling images (~24s load vs 10-15 min pulls)
+## How the bundles work
+
+1. `resolve-images.sh` runs `helm template` on published charts → extracts image references
+2. `build.sh` pulls images and saves them as two `.tar.gz` files (core + demo)
+3. Users place files at `~/.glassflow/glassflow-images.tar.gz` and `~/.glassflow/demo-images.tar.gz`
+4. `glassflow up` loads the core bundle; `setup-demo` and `--demo` also load the demo bundle
+5. Result: pods start without pulling images (~24s load vs 10-15 min pulls)
