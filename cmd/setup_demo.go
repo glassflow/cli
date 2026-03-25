@@ -11,7 +11,6 @@ import (
 	"github.com/glassflow/glassflow-cli/internal/install"
 	"github.com/glassflow/glassflow-cli/internal/k8s"
 	"github.com/glassflow/glassflow-cli/internal/tracking"
-	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -27,14 +26,13 @@ func init() {
 }
 
 func runSetupDemo(cmd *cobra.Command, args []string) (err error) {
-	installationID := uuid.New().String()
 	startTime := time.Now()
 	defer func() {
 		elapsed := time.Since(startTime)
 		if err != nil {
-			tracking.TrackSetupDemoFailed(installationID, version, err, elapsed)
+			tracking.TrackSetupDemoFailed(version, err, elapsed)
 		} else {
-			tracking.TrackSetupDemoCompleted(installationID, version, elapsed)
+			tracking.TrackSetupDemoCompleted(version, elapsed)
 		}
 	}()
 
@@ -42,7 +40,7 @@ func runSetupDemo(cmd *cobra.Command, args []string) (err error) {
 	demo.SetVersion(version)
 
 	fmt.Println("🎬 Setting up demo environment...")
-	tracking.TrackSetupDemoStarted(installationID, version)
+	tracking.TrackSetupDemoStarted(version)
 
 	// Load configuration
 	cfg, err := config.Load(configPath, version)

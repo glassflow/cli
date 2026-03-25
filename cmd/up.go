@@ -14,7 +14,6 @@ import (
 	"github.com/glassflow/glassflow-cli/internal/install"
 	"github.com/glassflow/glassflow-cli/internal/k8s"
 	"github.com/glassflow/glassflow-cli/internal/tracking"
-	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -86,14 +85,13 @@ func loadImageBundle(clusterName, bundleName string) bool {
 }
 
 func runUp(cmd *cobra.Command, args []string) (err error) {
-	installationID := uuid.New().String()
 	startTime := time.Now()
 	defer func() {
 		elapsed := time.Since(startTime)
 		if err != nil {
-			tracking.TrackUpFailed(installationID, version, upOptions.Demo, err, elapsed)
+			tracking.TrackUpFailed(version, upOptions.Demo, err, elapsed)
 		} else {
-			tracking.TrackUpCompleted(installationID, version, upOptions.Demo, elapsed)
+			tracking.TrackUpCompleted(version, upOptions.Demo, elapsed)
 		}
 	}()
 
@@ -105,7 +103,7 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 	demo.SetVersion(version)
 
 	fmt.Println("🚀 Starting GlassFlow local development environment...")
-	tracking.TrackUpStarted(installationID, version, upOptions.Demo)
+	tracking.TrackUpStarted(version, upOptions.Demo)
 
 	// Preflight: verify a Docker-compatible runtime is available
 	if err = checkDockerRuntime(); err != nil {
