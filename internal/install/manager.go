@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	typeddiscoveryv1 "k8s.io/client-go/kubernetes/typed/discovery/v1"
 
 	"github.com/glassflow/glassflow-cli/internal/config"
 	"github.com/glassflow/glassflow-cli/internal/demo"
@@ -360,8 +361,8 @@ func (i *Manager) installKafka(ctx context.Context) error {
 		},
 		// Required for single-broker: allow __consumer_offsets and transaction log to be created with 1 replica (avoids COORDINATOR_NOT_AVAILABLE)
 		"overrideConfiguration": map[string]interface{}{
-			"offsets.topic.replication.factor":            "1",
-			"transaction.state.log.replication.factor":     "1",
+			"offsets.topic.replication.factor":         "1",
+			"transaction.state.log.replication.factor": "1",
 		},
 		"image": map[string]interface{}{
 			"registry":   i.config.Charts.Kafka.Image.Registry,
@@ -460,7 +461,7 @@ func (i *Manager) installClickHouse(ctx context.Context) error {
 	return err
 }
 
-// WaitForServicesReady waits for GlassFlow services to be ready (have endpoints)
+// WaitForServicesReady waits for GlassFlow services to be ready (have endpoint slices)
 func (i *Manager) WaitForServicesReady(ctx context.Context) error {
 	k8sClient, err := i.k8sManager.GetKubernetesClient()
 	if err != nil {
@@ -484,24 +485,13 @@ func (i *Manager) WaitForServicesReady(ctx context.Context) error {
 	lastProgress := time.Now()
 	fmt.Println("💡 If pods stay Pending, increase Docker memory/CPU (e.g. Docker Desktop → Settings → Resources).")
 
+	esClient := k8sClient.DiscoveryV1().EndpointSlices
+
 	for {
 		if time.Now().After(deadline) {
-			// Report which services are still not ready
 			var notReady []string
 			for _, svc := range services {
-				endpoints, err := k8sClient.CoreV1().Endpoints(svc.namespace).Get(ctx, svc.name, metav1.GetOptions{})
-				if err != nil {
-					notReady = append(notReady, fmt.Sprintf("%s (ns: %s)", svc.name, svc.namespace))
-					continue
-				}
-				hasAddr := false
-				for _, subset := range endpoints.Subsets {
-					if len(subset.Addresses) > 0 {
-						hasAddr = true
-						break
-					}
-				}
-				if !hasAddr {
+				if !serviceHasReadyEndpointSlice(ctx, esClient(svc.namespace), svc.name) {
 					notReady = append(notReady, fmt.Sprintf("%s (ns: %s)", svc.name, svc.namespace))
 				}
 			}
@@ -511,20 +501,7 @@ func (i *Manager) WaitForServicesReady(ctx context.Context) error {
 		allReady := true
 		var notReady []string
 		for _, svc := range services {
-			endpoints, err := k8sClient.CoreV1().Endpoints(svc.namespace).Get(ctx, svc.name, metav1.GetOptions{})
-			if err != nil {
-				allReady = false
-				notReady = append(notReady, svc.label)
-				continue
-			}
-			hasReadyEndpoint := false
-			for _, subset := range endpoints.Subsets {
-				if len(subset.Addresses) > 0 {
-					hasReadyEndpoint = true
-					break
-				}
-			}
-			if !hasReadyEndpoint {
+			if !serviceHasReadyEndpointSlice(ctx, esClient(svc.namespace), svc.name) {
 				allReady = false
 				notReady = append(notReady, svc.label)
 			}
@@ -549,6 +526,25 @@ func (i *Manager) WaitForServicesReady(ctx context.Context) error {
 			// Continue polling
 		}
 	}
+}
+
+// serviceHasReadyEndpointSlice returns true if any EndpointSlice for the named service
+// has at least one ready endpoint address.
+func serviceHasReadyEndpointSlice(ctx context.Context, client typeddiscoveryv1.EndpointSliceInterface, serviceName string) bool {
+	slices, err := client.List(ctx, metav1.ListOptions{
+		LabelSelector: "kubernetes.io/service-name=" + serviceName,
+	})
+	if err != nil || len(slices.Items) == 0 {
+		return false
+	}
+	for _, slice := range slices.Items {
+		for _, ep := range slice.Endpoints {
+			if ep.Conditions.Ready != nil && *ep.Conditions.Ready {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // waitForKafkaAndClickHouse polls until both Kafka and ClickHouse pods are ready
