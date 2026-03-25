@@ -171,10 +171,11 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 	})
 
 	installManager := install.NewManager(helmManager, k8sManager, &install.Config{
-		Namespace:   "glassflow",
-		Demo:        upOptions.Demo,
-		Charts:      &cfg.Charts,
-		KubeContext: kubeContext,
+		Namespace:      "glassflow",
+		Demo:           upOptions.Demo,
+		Charts:         &cfg.Charts,
+		KubeContext:    kubeContext,
+		InstallationID: tracking.GetInstallationID(),
 	})
 
 	// Start environment
