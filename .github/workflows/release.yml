@@ -49,10 +49,11 @@ jobs:
           chmod +x resolve-images.sh build.sh
           ./build.sh
 
-      - name: Upload image bundle to release
+      - name: Upload image bundles to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.ref_name }}" \
             kind-node-image/output/glassflow-images.tar.gz \
+            kind-node-image/output/demo-images.tar.gz \
             --clobber

@@ -119,7 +119,9 @@ type PortMapping struct {
 // SetupPortForwarding starts kubectl port-forward for UI, API, and ClickHouse.
 // If kubectl missing, prints manual instructions including context.
 // Returns port mappings for use by demo code.
-func SetupPortForwarding(kubeContext string) (*PortMapping, error) {
+func SetupPortForwarding(kubeContext string, includeClickHouse ...bool) (*PortMapping, error) {
+	withClickHouse := len(includeClickHouse) > 0 && includeClickHouse[0]
+
 	if err := checkKubectl(); err != nil {
 		fmt.Println("⚠️  kubectl not found. Please port-forward manually with:")
 		ctxFlag := ""
@@ -128,20 +130,24 @@ func SetupPortForwarding(kubeContext string) (*PortMapping, error) {
 		}
 		fmt.Printf("   kubectl%s -n glassflow port-forward service/glassflow-api 30180:8081\n", ctxFlag)
 		fmt.Printf("   kubectl%s -n glassflow port-forward service/glassflow-ui 30080:8080\n", ctxFlag)
-		fmt.Printf("   kubectl%s -n clickhouse port-forward service/clickhouse 30090:8123\n", ctxFlag)
+		if withClickHouse {
+			fmt.Printf("   kubectl%s -n clickhouse port-forward service/clickhouse 30090:8123\n", ctxFlag)
+		}
 		return nil, nil
 	}
 
-	// namespace: GlassFlow services in glassflow, ClickHouse in clickhouse
-	services := map[string]struct {
+	type svcConfig struct {
 		preferredPort int
 		targetPort    int
 		name          string
 		namespace     string
-	}{
+	}
+	services := map[string]svcConfig{
 		"glassflow-api": {30180, 8081, "GlassFlow API", "glassflow"},
 		"glassflow-ui":  {30080, 8080, "GlassFlow UI", "glassflow"},
-		"clickhouse":    {30090, 8123, "ClickHouse HTTP", "clickhouse"},
+	}
+	if withClickHouse {
+		services["clickhouse"] = svcConfig{30090, 8123, "ClickHouse HTTP", "clickhouse"}
 	}
 
 	actual := make(map[string]int)

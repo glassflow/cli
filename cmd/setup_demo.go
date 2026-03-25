@@ -14,8 +14,8 @@ import (
 
 var setupDemoCmd = &cobra.Command{
 	Use:   "setup-demo",
-	Short: "Set up demo pipeline (port-forward, table, pipeline, producer)",
-	Long:  `Set up the demo pipeline: start port-forwarding, create ClickHouse table, create GlassFlow pipeline, and start the Kafka producer. Run after 'glassflow up' has completed successfully.`,
+	Short: "Install Kafka + ClickHouse and set up demo pipeline",
+	Long:  `Install Kafka and ClickHouse into the Kind cluster, then set up the demo pipeline: create ClickHouse table, create GlassFlow pipeline, and start the Kafka producer. Run after 'glassflow up' has completed successfully.`,
 	RunE:  runSetupDemo,
 }
 
@@ -27,7 +27,7 @@ func runSetupDemo(cmd *cobra.Command, args []string) error {
 	// Set version for demo package to use for GitHub downloads
 	demo.SetVersion(version)
 
-	fmt.Println("🎬 Setting up demo pipeline...")
+	fmt.Println("🎬 Setting up demo environment...")
 
 	// Load configuration
 	cfg, err := config.Load(configPath, version)
@@ -52,7 +52,7 @@ func runSetupDemo(cmd *cobra.Command, args []string) error {
 	}
 
 	if status.Status != "Running" {
-		return fmt.Errorf("cluster '%s' is not running. Please run 'glassflow up' first, then run this command", cfg.KindClusterName)
+		return fmt.Errorf("cluster '%s' is not running. Please run 'glassflow up' first", cfg.KindClusterName)
 	}
 
 	// Get Kubernetes client
@@ -76,13 +76,26 @@ func runSetupDemo(cmd *cobra.Command, args []string) error {
 		KubeContext: kubeContext,
 	})
 
+	// Load demo image bundle if available
+	loadImageBundle(cfg.KindClusterName, "demo-images")
+
+	// Install Kafka and ClickHouse
+	if err := installManager.InstallKafkaAndClickHouse(ctx); err != nil {
+		return fmt.Errorf("failed to install Kafka/ClickHouse: %w", err)
+	}
+
+	// Wait for Kafka and ClickHouse to be ready
+	fmt.Println("⏳ Waiting for Kafka and ClickHouse to be ready...")
+	if err := installManager.WaitForKafkaAndClickHouseReady(ctx); err != nil {
+		return fmt.Errorf("failed to wait for services: %w", err)
+	}
+
 	// Set up port forwarding
 	fmt.Println("🔗 Setting up port forwarding...")
-	portMapping, err := k8s.SetupPortForwarding(kubeContext)
+	portMapping, err := k8s.SetupPortForwarding(kubeContext, true)
 	if err != nil {
 		return fmt.Errorf("failed to setup port forwarding: %w", err)
 	}
-	// Port forwards are started in background, no need to wait
 
 	// Setup demo pipeline
 	if err := installManager.SetupDemo(ctx, portMapping); err != nil {

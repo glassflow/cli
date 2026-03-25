@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
-# resolve-images.sh — Resolves all container images required by the GlassFlow
-# local development stack (GlassFlow ETL + Kafka + ClickHouse).
+# resolve-images.sh — Resolves container images required by GlassFlow local dev stack.
 #
-# Usage: ./resolve-images.sh [--values-file PATH]
+# Images are resolved from the PUBLISHED Helm charts (not local files) to ensure
+# the bundle always matches what users will actually install.
 #
-# Runs `helm template` for each chart with the exact values the CLI uses,
-# parses all image: references, and outputs a deduplicated list.
+# Usage:
+#   ./resolve-images.sh              # all images
+#   ./resolve-images.sh --core       # GlassFlow + NATS + PostgreSQL + operator components
+#   ./resolve-images.sh --demo       # Kafka + ClickHouse + demo producer only
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CLI_DIR="$(dirname "$SCRIPT_DIR")"
-CHART_DIR="$(dirname "$CLI_DIR")/charts/charts/glassflow-etl"
-
-# Defaults from cli/internal/config/default_config.yaml
-GLASSFLOW_VALUES="${SCRIPT_DIR}/../internal/install/glassflow_values.yaml"
 KAFKA_VERSION="32.4.3"
 CLICKHOUSE_VERSION="9.4.4"
 
-# Ensure helm repos are available
+MODE="${1:-all}"
+
+# Ensure helm repos are available and up-to-date
 helm repo add glassflow https://glassflow.github.io/charts >/dev/null 2>&1 || true
 helm repo add bitnami https://charts.bitnami.com/bitnami >/dev/null 2>&1 || true
 helm repo update >/dev/null 2>&1
@@ -25,47 +23,84 @@ helm repo update >/dev/null 2>&1
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-# 1. GlassFlow ETL chart (includes NATS, PostgreSQL as sub-chart dependencies)
-echo "Resolving GlassFlow ETL images..." >&2
-helm template glassflow glassflow/glassflow-etl \
-  -f "$GLASSFLOW_VALUES" \
-  --namespace glassflow \
-  2>/dev/null > "$TMPDIR/glassflow.yaml" || true
+extract_images_from_yaml() {
+  # Extract image: fields from rendered YAML manifests
+  grep -hE '^\s+image:\s' "$@" 2>/dev/null \
+    | sed 's/.*image:\s*//' \
+    | tr -d '"' \
+    | tr -d "'" \
+    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+    | grep -v '^$'
+}
 
-# 2. Kafka chart (Bitnami)
-echo "Resolving Kafka images..." >&2
-helm template kafka bitnami/kafka \
-  --version "$KAFKA_VERSION" \
-  --set image.registry=docker.io \
-  --set image.repository=bitnamilegacy/kafka \
-  --set controller.replicaCount=1 \
-  --namespace kafka \
-  2>/dev/null > "$TMPDIR/kafka.yaml" || true
+resolve_core() {
+  echo "Resolving GlassFlow ETL images from published chart..." >&2
 
-# 3. ClickHouse chart (Bitnami)
-echo "Resolving ClickHouse images..." >&2
-helm template clickhouse bitnami/clickhouse \
-  --version "$CLICKHOUSE_VERSION" \
-  --set image.registry=docker.io \
-  --set image.repository=bitnamilegacy/clickhouse \
-  --set keeper.image.registry=docker.io \
-  --set keeper.image.repository=bitnamilegacy/clickhouse-keeper \
-  --namespace clickhouse \
-  2>/dev/null > "$TMPDIR/clickhouse.yaml" || true
+  # Get the published chart's default values (not local files)
+  VALUES=$(helm show values glassflow/glassflow-etl 2>/dev/null)
 
-# Extract all image references from rendered manifests
-# Handles both `image: foo` and `- image: foo` patterns
-grep -hE '^\s+image:\s' "$TMPDIR"/*.yaml \
-  | sed 's/.*image:\s*//' \
-  | tr -d '"' \
-  | tr -d "'" \
-  | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
-  | grep -v '^$' \
-  | sort -u > "$TMPDIR/images.txt"
+  # Extract global image registry
+  REGISTRY=$(echo "$VALUES" | grep 'imageRegistry:' | head -1 | sed 's/.*imageRegistry:\s*//;s/"//g;s/[[:space:]]//g')
 
-# Add images not in Helm charts but used by the CLI
-# Demo producer (created by cli/internal/demo/producer.go)
-echo "python:3.11-slim" >> "$TMPDIR/images.txt"
+  # Render the chart using its own default values (no local overrides)
+  helm template glassflow glassflow/glassflow-etl \
+    --namespace glassflow \
+    2>/dev/null > "$TMPDIR/glassflow.yaml" || true
 
-# Deduplicate and output
-sort -u "$TMPDIR/images.txt"
+  extract_images_from_yaml "$TMPDIR/glassflow.yaml"
+
+  # The operator component images (ingestor, join, sink, dedup) are NOT rendered
+  # by helm template because they are created dynamically by the operator when a
+  # pipeline runs. Extract them from the chart values directly.
+  echo "Resolving operator component images from chart values..." >&2
+  for component in ingestor join sink dedup; do
+    repo=$(echo "$VALUES" | grep -A3 "${component}:" | grep "repository:" | head -1 | sed 's/.*repository:\s*//;s/"//g;s/[[:space:]]//g')
+    tag=$(echo "$VALUES" | grep -A3 "${component}:" | grep "tag:" | head -1 | sed 's/.*tag:\s*//;s/"//g;s/[[:space:]]//g')
+    if [ -n "$repo" ] && [ -n "$tag" ]; then
+      echo "${REGISTRY}${repo}:${tag}"
+    fi
+  done
+
+  # Also include the notifier image
+  notifier_repo=$(echo "$VALUES" | grep -A5 "notifier:" | grep "repository:" | head -1 | sed 's/.*repository:\s*//;s/"//g;s/[[:space:]]//g')
+  notifier_tag=$(echo "$VALUES" | grep -A5 "notifier:" | grep "tag:" | head -1 | sed 's/.*tag:\s*//;s/"//g;s/[[:space:]]//g')
+  if [ -n "$notifier_repo" ] && [ -n "$notifier_tag" ]; then
+    echo "${REGISTRY}${notifier_repo}:${notifier_tag}"
+  fi
+}
+
+resolve_demo() {
+  # Kafka chart (Bitnami)
+  echo "Resolving Kafka images from published chart..." >&2
+  helm template kafka bitnami/kafka \
+    --version "$KAFKA_VERSION" \
+    --set image.registry=docker.io \
+    --set image.repository=bitnamilegacy/kafka \
+    --set controller.replicaCount=1 \
+    --namespace kafka \
+    2>/dev/null > "$TMPDIR/kafka.yaml" || true
+
+  # ClickHouse chart (Bitnami)
+  echo "Resolving ClickHouse images from published chart..." >&2
+  helm template clickhouse bitnami/clickhouse \
+    --version "$CLICKHOUSE_VERSION" \
+    --set image.registry=docker.io \
+    --set image.repository=bitnamilegacy/clickhouse \
+    --set keeper.image.registry=docker.io \
+    --set keeper.image.repository=bitnamilegacy/clickhouse-keeper \
+    --namespace clickhouse \
+    2>/dev/null > "$TMPDIR/clickhouse.yaml" || true
+
+  extract_images_from_yaml "$TMPDIR/kafka.yaml" "$TMPDIR/clickhouse.yaml"
+
+  # Demo producer image (created by CLI, not in any chart)
+  echo "python:3.11-slim"
+}
+
+{
+  case "$MODE" in
+    --core)  resolve_core ;;
+    --demo)  resolve_demo ;;
+    all|*)   resolve_core; resolve_demo ;;
+  esac
+} | sort -u || true
