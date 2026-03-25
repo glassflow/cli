@@ -41,8 +41,6 @@ func NewManager(config *Config) *Manager {
 }
 
 func (m *Manager) CreateCluster(ctx context.Context) error {
-	// Create Kind cluster with basic configuration
-	// Use default Kubernetes version (Kind will use the latest supported version)
 	return m.kindClient.Create(m.config.ClusterName)
 }
 

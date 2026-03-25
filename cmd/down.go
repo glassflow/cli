@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/glassflow/glassflow-cli/internal/config"
 	"github.com/glassflow/glassflow-cli/internal/helm"
 	"github.com/glassflow/glassflow-cli/internal/install"
 	"github.com/glassflow/glassflow-cli/internal/k8s"
+	"github.com/glassflow/glassflow-cli/internal/tracking"
 	"github.com/spf13/cobra"
 )
 
@@ -30,7 +32,17 @@ func init() {
 	downCmd.Flags().BoolVar(&downOptions.Force, "force", false, "Force cleanup even if resources are in use")
 }
 
-func runDown(cmd *cobra.Command, args []string) error {
+func runDown(cmd *cobra.Command, args []string) (err error) {
+	startTime := time.Now()
+	defer func() {
+		elapsed := time.Since(startTime)
+		if err != nil {
+			tracking.TrackDownFailed(version, downOptions.Force, err, elapsed)
+		} else {
+			tracking.TrackDownCompleted(version, downOptions.Force, elapsed)
+		}
+	}()
+
 	if verbose {
 		fmt.Printf("Stopping GlassFlow environment in namespace=glassflow, force=%v\n", downOptions.Force)
 	}
@@ -71,6 +83,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 		Kubeconfig:   cfg.Kubeconfig,
 		Context:      kubeContext,
 		Repositories: []helm.Repository{},
+		Verbose:      verbose,
 	})
 
 	installManager := install.NewManager(helmManager, k8sManager, &install.Config{

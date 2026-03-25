@@ -79,47 +79,16 @@ func (i *Manager) StartEnvironment(ctx context.Context, opts *StartOptions) erro
 	}
 
 	if opts.IncludeDemo {
-		// Install all charts in parallel for demo mode
-		var wg sync.WaitGroup
-		var glassflowErr, kafkaErr, clickhouseErr error
-
-		wg.Add(3)
-
-		// Install GlassFlow chart (no wait, runs in parallel)
-		go func() {
-			defer wg.Done()
-			glassflowErr = i.installGlassFlow(ctx)
-		}()
-
-		// Install Kafka chart (no wait, runs in parallel)
-		go func() {
-			defer wg.Done()
-			kafkaErr = i.installKafka(ctx)
-		}()
-
-		// Install ClickHouse chart (no wait, runs in parallel)
-		go func() {
-			defer wg.Done()
-			clickhouseErr = i.installClickHouse(ctx)
-		}()
-
-		wg.Wait()
-
-		// Check for errors
-		if glassflowErr != nil {
-			return fmt.Errorf("failed to install GlassFlow: %w", glassflowErr)
-		}
-		if kafkaErr != nil {
-			return fmt.Errorf("failed to install Kafka: %w", kafkaErr)
-		}
-		if clickhouseErr != nil {
-			return fmt.Errorf("failed to install ClickHouse: %w", clickhouseErr)
+		fmt.Println("📦 Installing services (GlassFlow, Kafka, ClickHouse)...")
+		if err := i.installAllServices(ctx); err != nil {
+			return err
 		}
 	} else {
-		// Non-demo mode: install GlassFlow only
+		fmt.Println("📦 Installing GlassFlow...")
 		if err := i.installGlassFlow(ctx); err != nil {
 			return fmt.Errorf("failed to install GlassFlow: %w", err)
 		}
+		fmt.Println("   ✅ GlassFlow installed")
 	}
 
 	return nil
@@ -165,6 +134,94 @@ func (i *Manager) StopEnvironment(ctx context.Context) error {
 		return fmt.Errorf("failed to delete Kind cluster: %w", err)
 	}
 
+	return nil
+}
+
+// installAllServices installs GlassFlow, Kafka, and ClickHouse in parallel.
+func (i *Manager) installAllServices(ctx context.Context) error {
+	var wg sync.WaitGroup
+	var glassflowErr, kafkaErr, clickhouseErr error
+
+	wg.Add(3)
+
+	go func() {
+		defer wg.Done()
+		glassflowErr = i.installGlassFlow(ctx)
+		if glassflowErr == nil {
+			fmt.Println("   ✅ GlassFlow installed")
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		kafkaErr = i.installKafka(ctx)
+		if kafkaErr == nil {
+			fmt.Println("   ✅ Kafka installed")
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		clickhouseErr = i.installClickHouse(ctx)
+		if clickhouseErr == nil {
+			fmt.Println("   ✅ ClickHouse installed")
+		}
+	}()
+
+	wg.Wait()
+
+	if glassflowErr != nil {
+		return fmt.Errorf("failed to install GlassFlow: %w", glassflowErr)
+	}
+	if kafkaErr != nil {
+		return fmt.Errorf("failed to install Kafka: %w", kafkaErr)
+	}
+	if clickhouseErr != nil {
+		return fmt.Errorf("failed to install ClickHouse: %w", clickhouseErr)
+	}
+	return nil
+}
+
+// InstallKafkaAndClickHouse installs Kafka and ClickHouse (called by setup-demo when they're not yet installed).
+func (i *Manager) InstallKafkaAndClickHouse(ctx context.Context) error {
+	// Ensure repos are available
+	if err := i.addRepositories(ctx); err != nil {
+		return fmt.Errorf("failed to add repositories: %w", err)
+	}
+	if err := i.helmManager.UpdateRepositories(ctx); err != nil {
+		return fmt.Errorf("failed to update helm repositories: %w", err)
+	}
+
+	fmt.Println("📦 Installing Kafka and ClickHouse...")
+	var wg sync.WaitGroup
+	var kafkaErr, clickhouseErr error
+
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		kafkaErr = i.installKafka(ctx)
+		if kafkaErr == nil {
+			fmt.Println("   ✅ Kafka installed")
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		clickhouseErr = i.installClickHouse(ctx)
+		if clickhouseErr == nil {
+			fmt.Println("   ✅ ClickHouse installed")
+		}
+	}()
+
+	wg.Wait()
+
+	if kafkaErr != nil {
+		return fmt.Errorf("failed to install Kafka: %w", kafkaErr)
+	}
+	if clickhouseErr != nil {
+		return fmt.Errorf("failed to install ClickHouse: %w", clickhouseErr)
+	}
 	return nil
 }
 
@@ -280,7 +337,7 @@ func (i *Manager) installKafka(ctx context.Context) error {
 	if _, createErr := k8sClient.CoreV1().Secrets(KafkaNamespace).Create(ctx, secret, metav1.CreateOptions{}); createErr != nil {
 		fmt.Printf("⚠️  Warning: Failed to create Kafka secret: %v\n", createErr)
 	} else {
-		fmt.Printf("✅ Created Kafka secret with deterministic password\n")
+		// Kafka secret created (deterministic password for demo)
 	}
 
 	// Kafka installation: 1 controller for local Kind dev (reduces storage: 25Gi + 1Gi logs).
@@ -410,11 +467,13 @@ func (i *Manager) WaitForServicesReady(ctx context.Context) error {
 		return fmt.Errorf("failed to get k8s client: %w", err)
 	}
 
-	// (namespace, serviceName) - GlassFlow in config namespace, ClickHouse in its own namespace
+	// Wait for GlassFlow services; include ClickHouse only in demo mode
 	services := []struct{ namespace, name, label string }{
 		{i.config.Namespace, "glassflow-api", "glassflow-api"},
 		{i.config.Namespace, "glassflow-ui", "glassflow-ui"},
-		{ClickHouseNamespace, "clickhouse", "clickhouse"},
+	}
+	if i.config.Demo {
+		services = append(services, struct{ namespace, name, label string }{ClickHouseNamespace, "clickhouse", "clickhouse"})
 	}
 	timeout := WaitForServicesTimeout
 	deadline := time.Now().Add(timeout)
@@ -493,6 +552,11 @@ func (i *Manager) WaitForServicesReady(ctx context.Context) error {
 }
 
 // waitForKafkaAndClickHouse polls until both Kafka and ClickHouse pods are ready
+// WaitForKafkaAndClickHouseReady polls until both Kafka and ClickHouse are ready.
+func (i *Manager) WaitForKafkaAndClickHouseReady(ctx context.Context) error {
+	return i.waitForKafkaAndClickHouse(ctx)
+}
+
 func (i *Manager) waitForKafkaAndClickHouse(ctx context.Context) error {
 	k8sClient, err := i.k8sManager.GetKubernetesClient()
 	if err != nil {

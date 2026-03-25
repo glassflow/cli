@@ -1,6 +1,7 @@
 package helm
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -23,6 +24,7 @@ type Config struct {
 	Kubeconfig   string
 	Context      string
 	Repositories []Repository
+	Verbose      bool
 }
 
 type Repository struct {
@@ -107,6 +109,25 @@ func (h *Manager) helmBaseArgs() []string {
 	return args
 }
 
+// openLogFile returns a writer for helm output. In verbose mode, returns nil (use stdout).
+// In quiet mode, appends to ~/.glassflow/install.log.
+func (h *Manager) openLogFile() *os.File {
+	if h.config.Verbose {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	logDir := filepath.Join(home, ".glassflow")
+	_ = os.MkdirAll(logDir, 0o755)
+	f, err := os.OpenFile(filepath.Join(logDir, "install.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil
+	}
+	return f
+}
+
 func (h *Manager) AddRepository(ctx context.Context, repoConfig *Repository) error {
 	if h.repoConfigPath == "" {
 		return fmt.Errorf("helm config directory not available")
@@ -118,12 +139,16 @@ func (h *Manager) AddRepository(ctx context.Context, repoConfig *Repository) err
 		return fmt.Errorf("failed to create repository cache directory: %w", err)
 	}
 
-	fmt.Printf("🔧 Running: helm repo add %s %s\n", repoConfig.Name, repoConfig.URL)
-
 	args := append(h.helmBaseArgs(), "repo", "add", repoConfig.Name, repoConfig.URL)
 	cmd := exec.CommandContext(ctx, "helm", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if logFile := h.openLogFile(); logFile != nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		defer logFile.Close()
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	cmd.Env = h.helmEnv()
 
 	if err := cmd.Run(); err != nil {
@@ -137,11 +162,16 @@ func (h *Manager) UpdateRepositories(ctx context.Context) error {
 	if h.repoConfigPath == "" {
 		return nil // no custom config, nothing to update
 	}
-	fmt.Printf("🔧 Running: helm repo update\n")
 	args := append(h.helmBaseArgs(), "repo", "update")
 	cmd := exec.CommandContext(ctx, "helm", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if logFile := h.openLogFile(); logFile != nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		defer logFile.Close()
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	cmd.Env = h.helmEnv()
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helm repo update failed: %w", err)
@@ -190,16 +220,24 @@ func (h *Manager) InstallChart(ctx context.Context, opts *InstallOptions) (*Rele
 		args = append(args, "--wait")
 	}
 
-	fmt.Printf("🔧 Running: helm upgrade --install %s %s --namespace %s -f %s --timeout %ds\n",
-		opts.ReleaseName, opts.Chart, opts.Namespace, valuesPath, opts.Timeout)
-
 	cmd := exec.CommandContext(ctx, "helm", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var outputBuf bytes.Buffer
+	if logFile := h.openLogFile(); logFile != nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		defer logFile.Close()
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	cmd.Env = h.helmEnv()
 
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("helm upgrade --install failed: %w", err)
+		// On failure, show captured output to help debugging
+		if outputBuf.Len() > 0 {
+			fmt.Fprint(os.Stderr, outputBuf.String())
+		}
+		return nil, fmt.Errorf("helm upgrade --install %s failed: %w", opts.ReleaseName, err)
 	}
 
 	return &Release{
@@ -219,12 +257,15 @@ func (h *Manager) UninstallChart(ctx context.Context, opts *UninstallOptions) er
 		args = append(args, "--wait")
 	}
 
-	fmt.Printf("🔧 Running: helm uninstall %s --namespace %s --timeout %ds\n",
-		opts.ReleaseName, opts.Namespace, opts.Timeout)
-
 	cmd := exec.CommandContext(ctx, "helm", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if logFile := h.openLogFile(); logFile != nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		defer logFile.Close()
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	cmd.Env = h.helmEnv()
 
 	if err := cmd.Run(); err != nil {

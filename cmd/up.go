@@ -3,7 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/glassflow/glassflow-cli/internal/config"
@@ -12,7 +14,6 @@ import (
 	"github.com/glassflow/glassflow-cli/internal/install"
 	"github.com/glassflow/glassflow-cli/internal/k8s"
 	"github.com/glassflow/glassflow-cli/internal/tracking"
-	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -24,15 +25,15 @@ var upOptions = &UpOptions{}
 
 var upCmd = &cobra.Command{
 	Use:   "up",
-	Short: "Start local development environment (install only)",
-	Long:  `Start a local GlassFlow development environment: create Kind cluster and install GlassFlow, Kafka, and ClickHouse. Waits until services are ready (can take 10–20+ minutes). Then run 'glassflow setup-demo' to create the demo pipeline. Use --demo to run install and demo in one go.`,
+	Short: "Start local GlassFlow environment",
+	Long:  `Start a local GlassFlow development environment: create Kind cluster and install GlassFlow. Use --demo to also install Kafka, ClickHouse, and set up a demo pipeline with data flowing end-to-end.`,
 	RunE:  runUp,
 }
 
 func init() {
 	rootCmd.AddCommand(upCmd)
 
-	upCmd.Flags().BoolVar(&upOptions.Demo, "demo", false, "After install, also set up port-forwarding and demo pipeline (default: install only)")
+	upCmd.Flags().BoolVar(&upOptions.Demo, "demo", false, "Also install Kafka + ClickHouse and set up a demo pipeline")
 }
 
 // checkDockerRuntime ensures a Docker-compatible runtime is available by invoking `docker info`.
@@ -45,14 +46,52 @@ func checkDockerRuntime() error {
 	return nil
 }
 
+// loadImageBundle loads a tar.gz image bundle from ~/.glassflow/ into the Kind cluster.
+// Returns true if images were loaded, false if bundle not found (non-fatal).
+func loadImageBundle(clusterName, bundleName string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	gzPath := filepath.Join(home, ".glassflow", bundleName+".tar.gz")
+	tarPath := filepath.Join(home, ".glassflow", bundleName+".tar")
+
+	archiveToLoad := ""
+	if _, err := os.Stat(gzPath); err == nil {
+		fmt.Printf("📦 Decompressing %s...\n", bundleName)
+		gunzip := exec.Command("gunzip", "-k", "-f", gzPath)
+		if err := gunzip.Run(); err != nil {
+			fmt.Printf("⚠️  Failed to decompress %s: %v\n", bundleName, err)
+			return false
+		}
+		archiveToLoad = tarPath
+	} else if _, err := os.Stat(tarPath); err == nil {
+		archiveToLoad = tarPath
+	} else {
+		return false
+	}
+
+	fmt.Printf("📦 Loading %s into cluster...\n", bundleName)
+	cmd := exec.Command("kind", "load", "image-archive", archiveToLoad, "--name", clusterName)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("⚠️  Failed to load %s: %v\n", bundleName, err)
+		fmt.Println("   Continuing without pre-loaded images (pods will pull images normally).")
+		return false
+	}
+	fmt.Printf("✅ %s loaded\n", bundleName)
+	return true
+}
+
 func runUp(cmd *cobra.Command, args []string) (err error) {
-	installationID := uuid.New().String()
 	startTime := time.Now()
 	defer func() {
+		elapsed := time.Since(startTime)
 		if err != nil {
-			tracking.TrackUpFailed(installationID, version, upOptions.Demo, err)
+			tracking.TrackUpFailed(version, upOptions.Demo, err, elapsed)
 		} else {
-			tracking.TrackUpCompleted(installationID, version, upOptions.Demo, time.Since(startTime))
+			tracking.TrackUpCompleted(version, upOptions.Demo, elapsed)
 		}
 	}()
 
@@ -64,7 +103,7 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 	demo.SetVersion(version)
 
 	fmt.Println("🚀 Starting GlassFlow local development environment...")
-	tracking.TrackUpStarted(installationID, version, upOptions.Demo)
+	tracking.TrackUpStarted(version, upOptions.Demo)
 
 	// Preflight: verify a Docker-compatible runtime is available
 	if err = checkDockerRuntime(); err != nil {
@@ -110,6 +149,12 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 		return err
 	}
 
+	// Load pre-built image bundles if available (speeds up first install significantly)
+	loadImageBundle(cfg.KindClusterName, "glassflow-images")
+	if upOptions.Demo {
+		loadImageBundle(cfg.KindClusterName, "demo-images")
+	}
+
 	// Now get the Kubernetes client
 	client, err := k8sManager.GetKubernetesClient()
 	if err != nil {
@@ -122,6 +167,7 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 		Kubeconfig:   cfg.Kubeconfig,
 		Context:      kubeContext,
 		Repositories: []helm.Repository{},
+		Verbose:      verbose,
 	})
 
 	installManager := install.NewManager(helmManager, k8sManager, &install.Config{
@@ -131,51 +177,17 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 		KubeContext: kubeContext,
 	})
 
-	// Check port availability before starting installation
-	if upOptions.Demo {
-		fmt.Println("🔍 Checking required ports availability...")
-		requiredPorts := []struct {
-			port int
-			name string
-		}{
-			{30180, "GlassFlow API"},
-			{30080, "GlassFlow UI"},
-			{30090, "ClickHouse HTTP"},
-		}
-
-		var occupiedPorts []string
-		for _, p := range requiredPorts {
-			if !k8s.IsPortAvailable(p.port) {
-				occupiedPorts = append(occupiedPorts, fmt.Sprintf("%s (port %d)", p.name, p.port))
-			}
-		}
-
-		if len(occupiedPorts) > 0 {
-			fmt.Printf("⚠️  Warning: The following ports are already in use:\n")
-			for _, p := range occupiedPorts {
-				fmt.Printf("   - %s\n", p)
-			}
-			fmt.Printf("💡 The CLI will attempt to find alternative ports, but services may fail to connect.\n")
-			fmt.Printf("💡 To free up ports, stop other services using them or kill existing port-forwards:\n")
-			fmt.Printf("   pkill -f 'kubectl port-forward'\n")
-			fmt.Println()
-		} else {
-			fmt.Println("✅ All required ports are available")
-		}
-		fmt.Println()
-	}
-
-	// Start environment (always install GlassFlow + Kafka + ClickHouse so cluster is ready for setup-demo)
+	// Start environment
 	if err = installManager.StartEnvironment(ctx, &install.StartOptions{
-		IncludeDemo: true, // always install all charts; --demo only controls whether we run port-forward + pipeline
+		IncludeDemo: upOptions.Demo,
 		Namespace:   "glassflow",
 	}); err != nil {
 		err = fmt.Errorf("failed to start environment: %w", err)
 		return err
 	}
 
-	// Always wait for services to be ready after install (so user knows when cluster is usable)
-	fmt.Println("⏳ Waiting for services to be ready (this can take 10–20+ minutes on first run)...")
+	// Wait for GlassFlow services (and Kafka/ClickHouse if --demo)
+	fmt.Println("⏳ Waiting for services to be ready...")
 	if err = installManager.WaitForServicesReady(ctx); err != nil {
 		err = fmt.Errorf("failed to wait for services: %w", err)
 		return err
@@ -185,7 +197,7 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 
 	// Start port forwarding (runs in background and persists after CLI exits)
 	fmt.Println("🔗 Setting up port forwarding...")
-	portMapping, err := k8s.SetupPortForwarding(kubeContext)
+	portMapping, err := k8s.SetupPortForwarding(kubeContext, upOptions.Demo)
 	if err != nil {
 		err = fmt.Errorf("failed to setup port forwarding: %w", err)
 		return err
@@ -202,7 +214,7 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 		}
 		fmt.Println("✅ Demo pipeline is ready!")
 	} else {
-		fmt.Println("💡 To set up the demo pipeline (ClickHouse table + pipeline + producer), run:")
+		fmt.Println("💡 To set up the demo pipeline (Kafka + ClickHouse + demo pipeline), run:")
 		fmt.Println("   glassflow setup-demo")
 	}
 
