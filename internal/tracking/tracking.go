@@ -16,11 +16,14 @@ const (
 	sourceCLI = "glassflow-cli"
 )
 
-// Event names for glassflow up
+// Event names
 const (
-	EventUpStarted   = "cli_up_started"
-	EventUpCompleted = "cli_up_completed"
-	EventUpFailed    = "cli_up_failed"
+	EventUpStarted        = "cli_up_started"
+	EventUpCompleted      = "cli_up_completed"
+	EventUpFailed         = "cli_up_failed"
+	EventSetupDemoStarted = "cli_setup_demo_started"
+	EventSetupDemoCompleted = "cli_setup_demo_completed"
+	EventSetupDemoFailed  = "cli_setup_demo_failed"
 )
 
 type tokenResponse struct {
@@ -115,7 +118,7 @@ func TrackUpCompleted(installationID, cliVersion string, demo bool, duration tim
 }
 
 // TrackUpFailed sends up_failed. Error message is truncated to avoid huge payloads.
-func TrackUpFailed(installationID, cliVersion string, demo bool, err error) {
+func TrackUpFailed(installationID, cliVersion string, demo bool, err error, duration time.Duration) {
 	msg := ""
 	if err != nil {
 		msg = err.Error()
@@ -124,8 +127,40 @@ func TrackUpFailed(installationID, cliVersion string, demo bool, err error) {
 		}
 	}
 	track(installationID, EventUpFailed, map[string]interface{}{
-		"demo":    demo,
+		"demo":             demo,
+		"version":          cliVersion,
+		"error":            msg,
+		"duration_seconds": int64(duration.Seconds()),
+	})
+}
+
+// TrackSetupDemoStarted sends setup_demo_started.
+func TrackSetupDemoStarted(installationID, cliVersion string) {
+	track(installationID, EventSetupDemoStarted, map[string]interface{}{
 		"version": cliVersion,
-		"error":   msg,
+	})
+}
+
+// TrackSetupDemoCompleted sends setup_demo_completed with duration.
+func TrackSetupDemoCompleted(installationID, cliVersion string, duration time.Duration) {
+	track(installationID, EventSetupDemoCompleted, map[string]interface{}{
+		"version":          cliVersion,
+		"duration_seconds": int64(duration.Seconds()),
+	})
+}
+
+// TrackSetupDemoFailed sends setup_demo_failed with error and duration.
+func TrackSetupDemoFailed(installationID, cliVersion string, err error, duration time.Duration) {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+		if len(msg) > 500 {
+			msg = msg[:500] + "..."
+		}
+	}
+	track(installationID, EventSetupDemoFailed, map[string]interface{}{
+		"version":          cliVersion,
+		"error":            msg,
+		"duration_seconds": int64(duration.Seconds()),
 	})
 }

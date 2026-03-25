@@ -89,10 +89,11 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 	installationID := uuid.New().String()
 	startTime := time.Now()
 	defer func() {
+		elapsed := time.Since(startTime)
 		if err != nil {
-			tracking.TrackUpFailed(installationID, version, upOptions.Demo, err)
+			tracking.TrackUpFailed(installationID, version, upOptions.Demo, err, elapsed)
 		} else {
-			tracking.TrackUpCompleted(installationID, version, upOptions.Demo, time.Since(startTime))
+			tracking.TrackUpCompleted(installationID, version, upOptions.Demo, elapsed)
 		}
 	}()
 

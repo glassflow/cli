@@ -3,12 +3,15 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/glassflow/glassflow-cli/internal/config"
 	"github.com/glassflow/glassflow-cli/internal/demo"
 	"github.com/glassflow/glassflow-cli/internal/helm"
 	"github.com/glassflow/glassflow-cli/internal/install"
 	"github.com/glassflow/glassflow-cli/internal/k8s"
+	"github.com/glassflow/glassflow-cli/internal/tracking"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -23,11 +26,23 @@ func init() {
 	rootCmd.AddCommand(setupDemoCmd)
 }
 
-func runSetupDemo(cmd *cobra.Command, args []string) error {
+func runSetupDemo(cmd *cobra.Command, args []string) (err error) {
+	installationID := uuid.New().String()
+	startTime := time.Now()
+	defer func() {
+		elapsed := time.Since(startTime)
+		if err != nil {
+			tracking.TrackSetupDemoFailed(installationID, version, err, elapsed)
+		} else {
+			tracking.TrackSetupDemoCompleted(installationID, version, elapsed)
+		}
+	}()
+
 	// Set version for demo package to use for GitHub downloads
 	demo.SetVersion(version)
 
 	fmt.Println("🎬 Setting up demo environment...")
+	tracking.TrackSetupDemoStarted(installationID, version)
 
 	// Load configuration
 	cfg, err := config.Load(configPath, version)
