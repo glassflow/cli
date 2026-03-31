@@ -3,7 +3,7 @@
 
 global:
   usageStats:
-    enabled: true
+    enabled: false
   observability:
     metrics:
       enabled: false
@@ -22,29 +22,28 @@ nats:
   enabled: true
   config:
     cluster:
-      enabled: true
-      port: 6222
-      replicas: 3
+      enabled: false
+      replicas: 1
     jetstream:
       enabled: true
       memoryStore:
         enabled: false
-        maxSize: 1Gi
+        maxSize: 256Mi
       fileStore:
         enabled: true
         dir: /data
         pvc:
           enabled: true
-          size: 20Gi
+          size: 5Gi
           storageClassName: ""
   container:
     merge:
       resources:
         requests:
-          memory: "1Gi"
-          cpu: "500m"
+          memory: "512Mi"
+          cpu: "100m"
         limits:
-          memory: "1Gi"
+          memory: "512Mi"
           cpu: "500m"
 
 
