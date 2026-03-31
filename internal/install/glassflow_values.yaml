@@ -3,7 +3,7 @@
 
 global:
   usageStats:
-    enabled: false
+    enabled: true
   observability:
     metrics:
       enabled: false
@@ -40,10 +40,10 @@ nats:
     merge:
       resources:
         requests:
-          memory: "512Mi"
-          cpu: "100m"
+          memory: "1Gi"
+          cpu: "500m"
         limits:
-          memory: "512Mi"
+          memory: "1Gi"
           cpu: "500m"
 
 
