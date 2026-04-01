@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,7 +22,8 @@ import (
 )
 
 type UpOptions struct {
-	Demo bool
+	Demo           bool
+	SkipPreflight  bool
 }
 
 var upOptions = &UpOptions{}
@@ -37,15 +39,66 @@ func init() {
 	rootCmd.AddCommand(upCmd)
 
 	upCmd.Flags().BoolVar(&upOptions.Demo, "demo", false, "Also install Kafka + ClickHouse and set up a demo pipeline")
+	upCmd.Flags().BoolVar(&upOptions.SkipPreflight, "skip-preflight", false, "Skip preflight checks (Docker resources, binary checks)")
 }
 
-// checkDockerRuntime ensures a Docker-compatible runtime is available by invoking `docker info`.
-// We intentionally do not detect specific providers; users can choose any Docker-compatible runtime.
-func checkDockerRuntime() error {
-	cmd := exec.Command("docker", "info")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("no Docker-compatible runtime detected. Please install and start a Docker-compatible runtime (e.g., Docker Desktop, OrbStack, Colima, or Podman) and ensure 'docker info' succeeds: %w", err)
+// runPreflightChecks validates all prerequisites before starting the environment.
+// Collects all errors and reports them together so the user can fix everything at once.
+func runPreflightChecks() error {
+	fmt.Println("🔍 Running preflight checks...")
+	var errors []string
+	var warnings []string
+
+	// Check Docker
+	dockerCmd := exec.Command("docker", "info", "--format", "json")
+	dockerOut, err := dockerCmd.Output()
+	if err != nil {
+		errors = append(errors, "Docker is not running. Please install and start a Docker-compatible runtime (Docker Desktop, OrbStack, Colima, or Podman).")
+	} else {
+		// Parse Docker info for resource checks
+		var info struct {
+			MemTotal int64 `json:"MemTotal"`
+			NCPU     int   `json:"NCPU"`
+		}
+		if json.Unmarshal(dockerOut, &info) == nil {
+			memGB := float64(info.MemTotal) / (1024 * 1024 * 1024)
+			if memGB < 2 {
+				errors = append(errors, fmt.Sprintf("Docker has %.1f GB RAM. GlassFlow requires at least 4 GB. Update in Docker Desktop > Settings > Resources.", memGB))
+			} else if memGB < 4 {
+				warnings = append(warnings, fmt.Sprintf("Docker has %.1f GB RAM. GlassFlow recommends at least 4 GB for reliable operation. Update in Docker Desktop > Settings > Resources.", memGB))
+			}
+			if info.NCPU < 2 {
+				warnings = append(warnings, fmt.Sprintf("Docker has %d CPU(s). GlassFlow recommends at least 2 CPUs.", info.NCPU))
+			}
+		}
 	}
+
+	// Check Helm
+	if _, err := exec.LookPath("helm"); err != nil {
+		errors = append(errors, "helm is not installed. Install with: brew install helm (or see https://helm.sh/docs/intro/install/)")
+	}
+
+	// Check kubectl
+	if _, err := exec.LookPath("kubectl"); err != nil {
+		errors = append(errors, "kubectl is not installed. Install with: brew install kubectl (or see https://kubernetes.io/docs/tasks/tools/)")
+	}
+
+	// Report warnings
+	for _, w := range warnings {
+		fmt.Printf("   ⚠️  %s\n", w)
+	}
+
+	// Report errors
+	if len(errors) > 0 {
+		fmt.Println()
+		for _, e := range errors {
+			fmt.Printf("   ❌ %s\n", e)
+		}
+		fmt.Println()
+		return fmt.Errorf("preflight checks failed (%d error(s)). Fix the issues above and try again", len(errors))
+	}
+
+	fmt.Println("   ✅ All preflight checks passed")
 	return nil
 }
 
@@ -192,9 +245,11 @@ func runUp(cmd *cobra.Command, args []string) (err error) {
 	fmt.Println("🚀 Starting GlassFlow local development environment...")
 	tracking.TrackUpStarted(version, upOptions.Demo)
 
-	// Preflight: verify a Docker-compatible runtime is available
-	if err = checkDockerRuntime(); err != nil {
-		return err
+	// Preflight checks
+	if !upOptions.SkipPreflight {
+		if err = runPreflightChecks(); err != nil {
+			return err
+		}
 	}
 
 	// Load configuration
