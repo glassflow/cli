@@ -22,20 +22,19 @@ nats:
   enabled: true
   config:
     cluster:
-      enabled: true
-      port: 6222
-      replicas: 3
+      enabled: false
+      replicas: 1
     jetstream:
       enabled: true
       memoryStore:
         enabled: false
-        maxSize: 1Gi
+        maxSize: 256Mi
       fileStore:
         enabled: true
         dir: /data
         pvc:
           enabled: true
-          size: 20Gi
+          size: 5Gi
           storageClassName: ""
   container:
     merge:
