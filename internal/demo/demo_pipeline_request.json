@@ -1,80 +1,49 @@
 {
+  "version": "v3",
   "pipeline_id": "demo-pipeline-qasxjh",
   "name": "Demo Pipeline",
-  "source": {
-    "type": "kafka",
-    "provider": "custom",
-    "connection_params": {
-      "brokers": [
-        "kafka.kafka.svc.cluster.local:9092"
+  "sources": [
+    {
+      "type": "kafka",
+      "source_id": "demo-events",
+      "connection_params": {
+        "brokers": [
+          "kafka.kafka.svc.cluster.local:9092"
+        ],
+        "mechanism": "NO_AUTH",
+        "protocol": "PLAINTEXT",
+        "skip_auth": true
+      },
+      "topic": "demo-events",
+      "schema_fields": [
+        {"name": "event_id", "type": "string"},
+        {"name": "type", "type": "string"},
+        {"name": "source", "type": "string"},
+        {"name": "created_at", "type": "string"}
       ],
-      "skip_auth": true,
-      "protocol": "PLAINTEXT"
-    },
-    "topics": [
-      {
-        "name": "demo-events",
-        "id": "demo-events",
-        "consumer_group_initial_offset": "earliest",
-        "replicas": 1,
-        "deduplication": {
-          "enabled": false,
-          "id_field": "",
-          "id_field_type": "",
-          "time_window": "0s"
-        }
-      }
-    ]
-  },
-  "join": {
-    "type": "temporal",
-    "enabled": false,
-    "sources": null
-  },
+      "consumer_group_initial_offset": "earliest"
+    }
+  ],
   "sink": {
     "type": "clickhouse",
-    "host": "clickhouse.clickhouse.svc.cluster.local",
-    "port": "9000",
-    "http_port": "8123",
-    "database": "default",
-    "username": "default",
-    "password": "",
+    "connection_params": {
+      "host": "clickhouse.clickhouse.svc.cluster.local",
+      "port": "9000",
+      "http_port": "8123",
+      "database": "default",
+      "username": "default",
+      "password": "placeholder",
+      "secure": false,
+      "skip_certificate_verification": true
+    },
     "table": "demo_events",
-    "secure": false,
     "max_batch_size": 100,
     "max_delay_time": "10s",
-    "skip_certificate_verification": true
-  },
-  "schema": {
-    "fields": [
-      {
-        "source_id": "demo-events",
-        "name": "event_id",
-        "type": "string",
-        "column_name": "event_id",
-        "column_type": "UUID"
-      },
-      {
-        "source_id": "demo-events",
-        "name": "type",
-        "type": "string",
-        "column_name": "type",
-        "column_type": "String"
-      },
-      {
-        "source_id": "demo-events",
-        "name": "source",
-        "type": "string",
-        "column_name": "source",
-        "column_type": "String"
-      },
-      {
-        "source_id": "demo-events",
-        "name": "created_at",
-        "type": "string",
-        "column_name": "created_at",
-        "column_type": "DateTime"
-      }
+    "mapping": [
+      {"name": "event_id", "column_name": "event_id", "column_type": "UUID"},
+      {"name": "type", "column_name": "type", "column_type": "String"},
+      {"name": "source", "column_name": "source", "column_type": "String"},
+      {"name": "created_at", "column_name": "created_at", "column_type": "DateTime"}
     ]
   }
 }
