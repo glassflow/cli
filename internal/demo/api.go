@@ -122,25 +122,42 @@ func (c *APIClient) CreatePipeline(ctx context.Context, requestJSONPath string, 
 		return "", fmt.Errorf("failed to parse pipeline request JSON: %w", err)
 	}
 
-	// Kafka is configured with SASL authentication
-	// Set SASL authentication credentials
+	// Inject Kafka SASL credentials — support both v2 (source) and v3 (sources[])
 	if source, ok := requestBody["source"].(map[string]interface{}); ok {
+		// v2 format
 		if connParams, ok := source["connection_params"].(map[string]interface{}); ok {
-			// Remove skip_auth if present
 			delete(connParams, "skip_auth")
-			// Set SASL authentication
 			connParams["protocol"] = "SASL_PLAINTEXT"
 			connParams["mechanism"] = "PLAIN"
 			connParams["username"] = kafkaUsername
 			connParams["password"] = kafkaPassword
 		}
+	} else if sources, ok := requestBody["sources"].([]interface{}); ok {
+		// v3 format — patch all sources
+		for _, s := range sources {
+			if src, ok := s.(map[string]interface{}); ok {
+				if connParams, ok := src["connection_params"].(map[string]interface{}); ok {
+					delete(connParams, "skip_auth")
+					connParams["protocol"] = "SASL_PLAINTEXT"
+					connParams["mechanism"] = "PLAIN"
+					connParams["username"] = kafkaUsername
+					connParams["password"] = kafkaPassword
+				}
+			}
+		}
 	}
 
-	// Inject ClickHouse credentials (password must be base64 encoded)
+	// Inject ClickHouse credentials — support both v2 (flat sink) and v3 (sink.connection_params)
 	if sink, ok := requestBody["sink"].(map[string]interface{}); ok {
-		sink["username"] = clickhouseUsername
-		// Base64 encode the password as required by GlassFlow API
-		sink["password"] = base64.StdEncoding.EncodeToString([]byte(clickhousePassword))
+		if connParams, ok := sink["connection_params"].(map[string]interface{}); ok {
+			// v3 format — plaintext password
+			connParams["username"] = clickhouseUsername
+			connParams["password"] = clickhousePassword
+		} else {
+			// v2 format — base64-encoded password
+			sink["username"] = clickhouseUsername
+			sink["password"] = base64.StdEncoding.EncodeToString([]byte(clickhousePassword))
+		}
 	}
 
 	// Re-marshal the updated JSON
